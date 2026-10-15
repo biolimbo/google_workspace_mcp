@@ -29,6 +29,11 @@ VALID_SUGGESTIONS_VIEW_MODES = (
     "PREVIEW_WITHOUT_SUGGESTIONS",
 )
 
+VALID_WRITE_MODES = (
+    "EDIT",
+    "SUGGEST",
+)
+
 VALID_TEXT_BASELINE_OFFSETS = (
     "NONE",
     "SUPERSCRIPT",
@@ -116,6 +121,33 @@ def validate_suggestions_view_mode(suggestions_view_mode: str) -> Optional[str]:
         "Error: suggestions_view_mode must be one of "
         f"{', '.join(VALID_SUGGESTIONS_VIEW_MODES)}, got '{suggestions_view_mode}'"
     )
+
+
+def validate_write_mode(write_mode: str) -> Optional[str]:
+    """Return an error message when write_mode is invalid."""
+    if write_mode in VALID_WRITE_MODES:
+        return None
+
+    return (
+        "Error: write_mode must be one of "
+        f"{', '.join(VALID_WRITE_MODES)}, got '{write_mode}'"
+    )
+
+
+def build_batch_update_body(
+    requests: List[Dict[str, Any]], write_mode: str = "EDIT"
+) -> Dict[str, Any]:
+    """
+    Build a documents.batchUpdate body for the requested write mode.
+
+    SUGGEST sets WriteControl.writeMode so the Docs API records every request in
+    the batch as a suggested edit instead of applying it. EDIT keeps the body
+    unchanged, which is the API default.
+    """
+    body: Dict[str, Any] = {"requests": requests}
+    if write_mode == "SUGGEST":
+        body["writeControl"] = {"writeMode": "SUGGEST"}
+    return body
 
 
 def _build_dimension(value: float, unit: str = "PT") -> Dict[str, Any]:
