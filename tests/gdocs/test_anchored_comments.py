@@ -18,6 +18,7 @@ from gdocs.docs_anchors import (
     resolve_anchor_range,
 )
 from gdocs.docs_comments import (
+    COMMENT_UPDATE_FAILED,
     MAX_COMMENT_UTF8_UNITS,
     build_insert_comment_request,
     insert_anchored_comment,
@@ -76,13 +77,19 @@ def _unwrap(tool):
     return fn
 
 
-def _docs_service(doc=None, comment_id="thread-1", quote="The quick brown fox."):
+def _docs_service(
+    doc=None,
+    comment_id="thread-1",
+    quote="The quick brown fox.",
+    update_state="ALL_SAVED",
+):
     service = Mock()
     documents = service.documents.return_value
     documents.get.return_value.execute.return_value = doc or {"body": BODY}
     thread = {"commentId": comment_id, "plainTextQuote": quote} if comment_id else {}
     documents.batchUpdate.return_value.execute.return_value = {
-        "replies": [{"insertComment": {"commentThread": thread}}]
+        "replies": [{"insertComment": {"commentThread": thread}}],
+        "commentUpdateState": update_state,
     }
     return service
 
@@ -232,6 +239,13 @@ class TestInsertAnchoredComment:
                 service, DOC_ID, "quick brown", "x" * (MAX_COMMENT_UTF8_UNITS + 1)
             )
         service.documents.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_failed_comment_update_state_is_reported(self):
+        service = _docs_service(update_state=COMMENT_UPDATE_FAILED)
+
+        with pytest.raises(RuntimeError, match="was not saved"):
+            await insert_anchored_comment(service, DOC_ID, "quick brown", "x")
 
     @pytest.mark.asyncio
     async def test_missing_comment_id_raises(self):
