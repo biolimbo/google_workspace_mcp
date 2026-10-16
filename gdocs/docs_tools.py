@@ -1687,7 +1687,9 @@ async def inspect_doc_structure(
         find_text: Optional literal text to locate in the inspected tab's body. The
             result gains text_matches with the index range of each occurrence (at
             most 50; count stays exact), its paragraph range, whether it sits in a
-            table, and surrounding context.
+            table, whether it is pending suggestion text (in_suggestion: insertion,
+            deletion, mixed or null), and surrounding context with suggested text
+            marked as {++inserted++} or {--deleted--}.
 
     Returns:
         str: JSON string containing document structure and safe insertion indices

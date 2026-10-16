@@ -92,6 +92,7 @@ class TestFindTextRanges:
                 "paragraph_start_index": 7,
                 "paragraph_end_index": 28,
                 "in_table": False,
+                "in_suggestion": None,
                 "context": "The quick brown fox.",
             }
         ]
@@ -159,6 +160,66 @@ class TestFindTextRanges:
         found = find_text_ranges(DOC, "Intro\nThe")
 
         assert found["count"] == 0
+
+
+def _suggested_run(start, text, kind):
+    run = _text_run(start, text)
+    key = "suggestedInsertionIds" if kind == "insertion" else "suggestedDeletionIds"
+    run["textRun"][key] = ["suggest.1"]
+    return run
+
+
+def _paragraph_from_runs(start, *runs):
+    return {
+        "startIndex": start,
+        "endIndex": runs[-1]["endIndex"],
+        "paragraph": {"elements": list(runs)},
+    }
+
+
+# "The fox jumps over the " 1-24, {++sleeping dog++} 24-36, {--lazy dog--} 36-44, ".\n" 44-46
+SUGGESTED_DOC = _doc(
+    _paragraph_from_runs(
+        1,
+        _text_run(1, "The fox jumps over the "),
+        _suggested_run(24, "sleeping dog", "insertion"),
+        _suggested_run(36, "lazy dog", "deletion"),
+        _text_run(44, ".\n"),
+    )
+)
+
+
+class TestFindTextInSuggestions:
+    def test_settled_text_is_not_flagged(self):
+        match = find_text_ranges(SUGGESTED_DOC, "fox jumps")["matches"][0]
+
+        assert match["in_suggestion"] is None
+
+    def test_suggested_insertion_is_flagged_and_marked_in_context(self):
+        match = find_text_ranges(SUGGESTED_DOC, "sleeping dog")["matches"][0]
+
+        assert (match["start_index"], match["end_index"]) == (24, 36)
+        assert match["in_suggestion"] == "insertion"
+        assert match["context"] == (
+            "The fox jumps over the {++sleeping dog++}{--lazy dog--}."
+        )
+
+    def test_suggested_deletion_is_flagged(self):
+        match = find_text_ranges(SUGGESTED_DOC, "lazy dog")["matches"][0]
+
+        assert (match["start_index"], match["end_index"]) == (36, 44)
+        assert match["in_suggestion"] == "deletion"
+
+    def test_match_spanning_settled_and_suggested_text_is_mixed(self):
+        match = find_text_ranges(SUGGESTED_DOC, "the sleeping")["matches"][0]
+
+        assert match["in_suggestion"] == "mixed"
+
+    def test_context_without_suggestions_has_no_markers(self):
+        match = find_text_ranges(DOC, "quick brown")["matches"][0]
+
+        assert match["context"] == "The quick brown fox."
+        assert match["in_suggestion"] is None
 
 
 class TestValidateFindText:
