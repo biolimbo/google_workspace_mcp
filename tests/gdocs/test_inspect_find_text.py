@@ -215,6 +215,17 @@ class TestFindTextInSuggestions:
 
         assert match["in_suggestion"] == "mixed"
 
+    def test_run_inserted_then_deleted_is_mixed(self):
+        run = _text_run(1, "twice\n")
+        run["textRun"]["suggestedInsertionIds"] = ["suggest.1"]
+        run["textRun"]["suggestedDeletionIds"] = ["suggest.2"]
+        doc = _doc(_paragraph_from_runs(1, run))
+
+        match = find_text_ranges(doc, "twice")["matches"][0]
+
+        assert match["in_suggestion"] == "mixed"
+        assert match["context"] == "{--{++twice++}--}"
+
     def test_context_without_suggestions_has_no_markers(self):
         match = find_text_ranges(DOC, "quick brown")["matches"][0]
 
