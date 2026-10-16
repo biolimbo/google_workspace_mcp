@@ -243,6 +243,13 @@ def _iter_body_paragraphs(
                     yield from _iter_body_paragraphs(cell, in_table=True)
 
 
+def validate_find_text(find_text: Optional[str]) -> Optional[str]:
+    """Return an error message when find_text is given but blank, else None."""
+    if find_text is not None and not find_text.strip():
+        return "Error: find_text must not be empty."
+    return None
+
+
 def find_text_ranges(
     doc_data: dict[str, Any],
     needle: str,

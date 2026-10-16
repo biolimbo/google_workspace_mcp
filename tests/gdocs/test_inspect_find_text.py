@@ -6,7 +6,11 @@ from unittest.mock import Mock
 import pytest
 
 from gdocs import docs_tools
-from gdocs.docs_structure import TEXT_MATCH_LIMIT, find_text_ranges
+from gdocs.docs_structure import (
+    TEXT_MATCH_LIMIT,
+    find_text_ranges,
+    validate_find_text,
+)
 
 
 def _unwrap(tool):
@@ -155,6 +159,16 @@ class TestFindTextRanges:
         found = find_text_ranges(DOC, "Intro\nThe")
 
         assert found["count"] == 0
+
+
+class TestValidateFindText:
+    @pytest.mark.parametrize("value", [None, "x", " needle "])
+    def test_accepts_absent_or_non_blank(self, value):
+        assert validate_find_text(value) is None
+
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_rejects_blank(self, value):
+        assert validate_find_text(value) == "Error: find_text must not be empty."
 
 
 class TestInspectDocStructureFindText:
