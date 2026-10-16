@@ -54,6 +54,7 @@ from gdocs.docs_helpers import (
     validate_suggestions_view_mode,
     validate_write_mode,
     build_batch_update_body,
+    suggestion_save_error,
     create_update_paragraph_style_request,
     extract_text_from_elements,
     process_tab_hierarchy,
@@ -875,7 +876,7 @@ async def modify_doc_text(
         )
 
     try:
-        await asyncio.to_thread(
+        result = await asyncio.to_thread(
             service.documents()
             .batchUpdate(
                 documentId=document_id,
@@ -885,6 +886,10 @@ async def modify_doc_text(
         )
     except HttpError as error:
         raise _rewrite_modify_doc_text_http_error(error, segment_id) from error
+
+    save_error = suggestion_save_error(result, write_mode)
+    if save_error:
+        return f"Error: {save_error}"
 
     link = f"https://docs.google.com/document/d/{document_id}/edit"
     if write_mode == "SUGGEST":
@@ -961,6 +966,10 @@ async def find_and_replace_doc(
         )
         .execute
     )
+
+    save_error = suggestion_save_error(result, write_mode)
+    if save_error:
+        return f"Error: {save_error}"
 
     # Extract number of replacements from response
     replacements = 0

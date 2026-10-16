@@ -16,6 +16,7 @@ from gdocs.docs_anchors import (
 from gdocs.docs_helpers import (
     utf16_length,
     build_batch_update_body,
+    suggestion_save_error,
     create_insert_text_request,
     create_delete_range_request,
     create_format_text_request,
@@ -152,6 +153,10 @@ class BatchOperationManager:
             result = await self._execute_batch_requests(
                 document_id, requests, write_mode
             )
+
+            save_error = suggestion_save_error(result, write_mode)
+            if save_error:
+                return False, save_error, {}
 
             # Process results
             metadata = {

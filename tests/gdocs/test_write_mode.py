@@ -5,10 +5,16 @@ from unittest.mock import Mock
 import pytest
 
 from gdocs import docs_tools
-from gdocs.docs_helpers import build_batch_update_body, validate_write_mode
+from gdocs.docs_helpers import (
+    build_batch_update_body,
+    suggestion_save_error,
+    validate_write_mode,
+)
 from gdocs.managers.batch_operation_manager import BatchOperationManager
 
 DOC_ID = "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdEf"
+SAVED = {"commentUpdateState": "ALL_SAVED"}
+FAILED = {"commentUpdateState": "ALL_FAILED_UNKNOWN_REASON"}
 
 
 def _unwrap(tool):
@@ -59,9 +65,31 @@ class TestValidateWriteMode:
         assert error.startswith("Error: write_mode must be one of EDIT, SUGGEST")
 
 
+class TestSuggestionSaveError:
+    def test_reports_failed_suggestion_save(self):
+        error = suggestion_save_error(FAILED, "SUGGEST")
+        assert "did not save these changes as suggestions" in error
+        assert "version history" in error
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            SAVED,
+            {"commentUpdateState": "NO_UPDATES_REQUESTED"},
+            {"commentUpdateState": "COMMENT_UPDATE_STATE_UNSPECIFIED"},
+            {},
+        ],
+    )
+    def test_other_or_missing_states_are_not_failures(self, result):
+        assert suggestion_save_error(result, "SUGGEST") is None
+
+    def test_edit_mode_ignores_comment_update_state(self):
+        assert suggestion_save_error(FAILED, "EDIT") is None
+
+
 @pytest.mark.asyncio
 async def test_modify_doc_text_submits_suggestion_when_requested():
-    service = _docs_service()
+    service = _docs_service({"replies": [{}, {}], **SAVED})
 
     result = await _unwrap(docs_tools.modify_doc_text)(
         service=service,
@@ -118,7 +146,7 @@ async def test_modify_doc_text_rejects_invalid_write_mode_without_calling_api():
 @pytest.mark.asyncio
 async def test_find_and_replace_doc_submits_suggestions_when_requested():
     service = _docs_service(
-        {"replies": [{"replaceAllText": {"occurrencesChanged": 2}}]}
+        {"replies": [{"replaceAllText": {"occurrencesChanged": 2}}], **SAVED}
     )
 
     result = await _unwrap(docs_tools.find_and_replace_doc)(
@@ -155,7 +183,7 @@ async def test_find_and_replace_doc_rejects_invalid_write_mode_without_calling_a
 
 @pytest.mark.asyncio
 async def test_batch_update_doc_submits_whole_batch_as_suggestions():
-    service = _docs_service({"replies": [{}, {}]})
+    service = _docs_service({"replies": [{}, {}], **SAVED})
 
     result = await _unwrap(docs_tools.batch_update_doc)(
         service=service,
@@ -202,3 +230,54 @@ async def test_batch_manager_defaults_to_direct_edits():
     assert success
     assert "writeControl" not in _batch_body(service)
     assert "suggested" not in message
+
+
+@pytest.mark.asyncio
+async def test_modify_doc_text_reports_unsaved_suggestions():
+    service = _docs_service({"replies": [{}], **FAILED})
+
+    result = await _unwrap(docs_tools.modify_doc_text)(
+        service=service,
+        user_google_email="user@example.com",
+        document_id=DOC_ID,
+        start_index=1,
+        text="Hello",
+        write_mode="SUGGEST",
+    )
+
+    assert result.startswith("Error: Google Docs did not save these changes")
+    assert "Suggested" not in result
+
+
+@pytest.mark.asyncio
+async def test_find_and_replace_doc_reports_unsaved_suggestions():
+    service = _docs_service(
+        {"replies": [{"replaceAllText": {"occurrencesChanged": 1}}], **FAILED}
+    )
+
+    result = await _unwrap(docs_tools.find_and_replace_doc)(
+        service=service,
+        user_google_email="user@example.com",
+        document_id=DOC_ID,
+        find_text="colour",
+        replace_text="color",
+        write_mode="SUGGEST",
+    )
+
+    assert result.startswith("Error: Google Docs did not save these changes")
+
+
+@pytest.mark.asyncio
+async def test_batch_update_doc_reports_unsaved_suggestions():
+    service = _docs_service({"replies": [{}], **FAILED})
+
+    result = await _unwrap(docs_tools.batch_update_doc)(
+        service=service,
+        user_google_email="user@example.com",
+        document_id=DOC_ID,
+        operations=[{"type": "insert_text", "index": 1, "text": "Intro\n"}],
+        write_mode="SUGGEST",
+    )
+
+    assert result.startswith("Error: Google Docs did not save these changes")
+    assert "as suggested edits" not in result

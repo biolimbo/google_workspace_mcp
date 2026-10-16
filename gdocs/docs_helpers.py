@@ -150,6 +150,27 @@ def build_batch_update_body(
     return body
 
 
+def suggestion_save_error(result: Dict[str, Any], write_mode: str) -> Optional[str]:
+    """
+    Return a failure description when a SUGGEST batch did not save its suggestions.
+
+    The Docs API reports ALL_FAILED_UNKNOWN_REASON in commentUpdateState when
+    suggestions fail to save, even though the document changes themselves may
+    have been committed. Any other or missing state is not treated as a failure.
+    """
+    if write_mode != "SUGGEST":
+        return None
+    if result.get("commentUpdateState") != "ALL_FAILED_UNKNOWN_REASON":
+        return None
+
+    return (
+        "Google Docs did not save these changes as suggestions "
+        "(commentUpdateState=ALL_FAILED_UNKNOWN_REASON). The document may have "
+        "been edited directly; check its version history before retrying, since "
+        "retrying could duplicate the change."
+    )
+
+
 def _build_dimension(value: float, unit: str = "PT") -> Dict[str, Any]:
     """Build a Google Docs Dimension object."""
     return {"magnitude": value, "unit": unit}
