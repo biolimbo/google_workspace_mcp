@@ -8,7 +8,7 @@ error, where an edit lands on unrelated content without failing.
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from gdocs.docs_helpers import _paragraph_element_text, utf16_length
 
@@ -34,7 +34,9 @@ def _aligned_paragraph_text(paragraph: dict[str, Any]) -> str:
     )
 
 
-def iter_paragraphs(body: dict[str, Any], include_tables: bool = False):
+def iter_paragraphs(
+    body: dict[str, Any], include_tables: bool = False
+) -> Iterator[tuple[int, int, str, dict[str, Any]]]:
     """Yield (start_index, end_index, text, paragraph_style) for each paragraph.
 
     With include_tables, paragraphs inside table cells are yielded too, in
