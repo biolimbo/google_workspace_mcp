@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 # InsertCommentRequest.content is capped by the Docs API.
 MAX_COMMENT_UTF8_UNITS = 2048
 
+# BatchUpdateDocumentResponse.commentUpdateState when no comment was saved.
+COMMENT_UPDATE_FAILED = "ALL_FAILED_UNKNOWN_REASON"
+
 
 def _tab_body(doc: dict[str, Any], tab_id: Optional[str]) -> dict[str, Any]:
     """Body of the requested tab, or of the first tab when none is given."""
@@ -97,6 +100,13 @@ async def insert_anchored_comment(
         .execute
     )
 
+    # The batch response carries a comment-specific status; a reply alone is not
+    # confirmation that the thread was saved.
+    if response.get("commentUpdateState") == COMMENT_UPDATE_FAILED:
+        raise RuntimeError(
+            "Docs API reported that the comment was not saved "
+            f"({COMMENT_UPDATE_FAILED}); check list_document_comments before retrying."
+        )
     replies = response.get("replies") or [{}]
     thread = replies[0].get("insertComment", {}).get("commentThread", {})
     comment_id = thread.get("commentId")
