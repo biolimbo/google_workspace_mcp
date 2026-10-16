@@ -65,6 +65,7 @@ from gdocs.docs_structure import (
     summarize_paragraph_layout,
     truncate_preview,
     find_text_ranges,
+    validate_find_text,
 )
 from gdocs.docs_tables import extract_table_as_data
 from gdocs.docs_markdown import (
@@ -1647,8 +1648,9 @@ async def inspect_doc_structure(
     Returns:
         str: JSON string containing document structure and safe insertion indices
     """
-    if find_text is not None and not find_text.strip():
-        return "Error: find_text must not be empty."
+    find_text_error = validate_find_text(find_text)
+    if find_text_error:
+        return find_text_error
 
     logger.debug(
         f"[inspect_doc_structure] Doc={document_id}, detailed={detailed}, "
