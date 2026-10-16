@@ -160,3 +160,102 @@ class TestSuggestedTextStyle:
         )
 
         assert "{++**new words**++}" in convert_doc_to_markdown(doc)
+
+
+class TestReviewFollowUps:
+    def test_style_only_suggestion_gets_the_legend(self):
+        doc = _doc(
+            [
+                _run(
+                    "dog",
+                    suggestedTextStyleChanges={
+                        "s": {
+                            "textStyle": {"bold": True},
+                            "textStyleSuggestionState": {"boldSuggested": True},
+                        }
+                    },
+                ),
+                _run("\n"),
+            ]
+        )
+
+        markdown = convert_doc_to_markdown(doc)
+
+        assert markdown.startswith(SUGGESTION_LEGEND)
+        assert "**dog**" in markdown
+
+    def test_suggested_link_is_grouped_and_rendered(self):
+        change = {
+            "s": {
+                "textStyle": {"link": {"url": "https://example.com"}},
+                "textStyleSuggestionState": {"linkSuggested": True},
+            }
+        }
+        doc = _doc(
+            [
+                _run("Read "),
+                _run("the ", suggestedTextStyleChanges=change),
+                _run("docs", {"bold": True}, suggestedTextStyleChanges=change),
+                _run(" now.\n"),
+            ]
+        )
+
+        markdown = convert_doc_to_markdown(doc)
+
+        assert "[the **docs**](https://example.com)" in markdown
+
+    def test_suggested_link_removal_drops_the_link(self):
+        doc = _doc(
+            [
+                _run(
+                    "old link",
+                    {"link": {"url": "https://old.example"}},
+                    suggestedTextStyleChanges={
+                        "s": {
+                            "textStyle": {},
+                            "textStyleSuggestionState": {"linkSuggested": True},
+                        }
+                    },
+                ),
+                _run("\n"),
+            ]
+        )
+
+        markdown = convert_doc_to_markdown(doc)
+
+        assert "old.example" not in markdown
+        assert "old link" in markdown
+
+    def test_deleted_person_chip_is_marked(self):
+        doc = _doc(
+            [
+                _run("Ask "),
+                {
+                    "person": {
+                        "personProperties": {"name": "Ana", "email": "ana@example.com"}
+                    },
+                    "suggestedDeletionIds": ["s"],
+                },
+                _run(".\n"),
+            ]
+        )
+
+        markdown = convert_doc_to_markdown(doc)
+
+        assert "Ask {--[Ana](mailto:ana@example.com)--}." in markdown
+
+    def test_inserted_date_chip_is_marked(self):
+        doc = _doc(
+            [
+                _run("Due "),
+                {
+                    "dateElement": {"dateElementProperties": {"displayText": "Oct 20"}},
+                    "suggestedInsertionIds": ["s"],
+                },
+                _run("\n"),
+            ]
+        )
+
+        markdown = convert_doc_to_markdown(doc)
+
+        assert "Due {++" in markdown and "Oct 20" in markdown and "++}" in markdown
