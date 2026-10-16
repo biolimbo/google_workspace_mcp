@@ -222,6 +222,12 @@ class TestFindTextInSuggestions:
         assert match["in_suggestion"] is None
 
 
+def test_structure_field_mask_keeps_suggestion_labels():
+    """find_text reads suggestion ids from the inspect fetch, so the mask must keep them."""
+    assert "suggestedInsertionIds" in docs_tools._STRUCTURE_FIELDS
+    assert "suggestedDeletionIds" in docs_tools._STRUCTURE_FIELDS
+
+
 class TestValidateFindText:
     @pytest.mark.parametrize("value", [None, "x", " needle "])
     def test_accepts_absent_or_non_blank(self, value):
