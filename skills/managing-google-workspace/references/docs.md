@@ -99,6 +99,7 @@ Insert or replace text and/or apply character formatting in a single operation. 
 | text_color | string | no | | Hex color `#RRGGBB` |
 | background_color | string | no | | Highlight color `#RRGGBB` |
 | link_url | string | no | | Hyperlink URL (http/https) |
+| write_mode | string | no | EDIT | `SUGGEST` records the change as a suggested edit |
 
 ### find_and_replace_doc
 Find and replace text throughout a document (or a specific tab).
@@ -111,6 +112,7 @@ Find and replace text throughout a document (or a specific tab).
 | replace_text | string | yes | | Replacement text |
 | match_case | boolean | no | false | Case-sensitive matching |
 | tab_id | string | no | | Target a specific tab |
+| write_mode | string | no | EDIT | `SUGGEST` records the replacements as suggested edits |
 
 ---
 
@@ -318,6 +320,7 @@ Execute multiple operations atomically in a single API call. Each operation is a
 | user_google_email | string | yes | | |
 | document_id | string | yes | | |
 | operations | array | yes | | List of operation dicts (see types below) |
+| write_mode | string | no | EDIT | `SUGGEST` records every operation as a suggested edit |
 
 **Operation types:**
 
@@ -347,6 +350,8 @@ Use `list_type='NONE'` in `create_bullet_list` to remove existing list formattin
 **Batch operations and index ordering**: When using `batch_update_doc` with multiple operations that change document length (inserts, deletes), process them from highest index to lowest. This prevents earlier operations from invalidating the indices of later ones. Alternatively, use `find_replace` operations which do not depend on indices.
 
 **Structural inspection workflow**: For tables: (1) call `inspect_doc_structure` to get `total_length`, (2) use that as the insertion index for `create_table_with_data`, (3) call `debug_table_structure` to verify the result. Never guess insertion indices.
+
+**Suggesting instead of editing**: Pass `write_mode="SUGGEST"` to `modify_doc_text`, `find_and_replace_doc`, or `batch_update_doc` to record changes as suggested edits that collaborators accept or reject in Docs. The Docs API rejects some requests as suggestions, such as named range and tab changes. Use `get_doc_content` with `suggestions_view_mode` to review pending suggestions.
 
 **Formatting without changing text**: Call `modify_doc_text` with `start_index` and `end_index` but omit `text` to apply formatting (bold, italic, color, etc.) to existing content.
 
