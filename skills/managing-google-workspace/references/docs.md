@@ -280,8 +280,10 @@ Returns document structure metadata: element count, total length, table position
 | document_id | string | yes | | |
 | detailed | boolean | no | false | Return detailed structure info |
 | tab_id | string | no | | Inspect a specific tab (default: main document) |
+| find_text | string | no | | Locate literal text in the inspected tab's body (table cells included); adds `text_matches` |
 
 Key output fields:
+- `text_matches` -- with `find_text`: `count`, and up to 50 `matches` each with `start_index`, `end_index`, `paragraph_start_index`, `paragraph_end_index`, `in_table`, `context`; `truncated` when more were found
 - `total_elements` -- number of document elements
 - `total_length` -- maximum safe insertion index
 - `tables` -- count of existing tables

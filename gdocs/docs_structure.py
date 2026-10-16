@@ -6,12 +6,20 @@ of Google Docs documents, including finding tables, cells, and other elements.
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
+
+from gdocs.docs_helpers import _paragraph_element_text, utf16_length
 
 logger = logging.getLogger(__name__)
 
 # Limit returned ranges; the count remains exact.
 EMPTY_PARAGRAPH_RANGE_LIMIT = 100
+
+# Limit returned text matches; the count remains exact.
+TEXT_MATCH_LIMIT = 50
+
+# Characters of surrounding text shown with each match.
+TEXT_MATCH_CONTEXT_CHARS = 40
 
 
 def truncate_preview(text: str, preview_chars: Optional[int]) -> str:
@@ -219,6 +227,67 @@ def _parse_segment(
         "end_index": content[-1].get("endIndex", 0) if content else 0,
         "text_preview": truncate_preview("".join(text_parts), preview_chars),
         "element_count": len(content),
+    }
+
+
+def _iter_body_paragraphs(
+    body: dict[str, Any], in_table: bool = False
+) -> Iterator[tuple[dict[str, Any], bool]]:
+    """Yield (structural element, in_table) for every paragraph, table cells included."""
+    for element in body.get("content", []):
+        if "paragraph" in element:
+            yield element, in_table
+        elif "table" in element:
+            for row in element["table"].get("tableRows", []):
+                for cell in row.get("tableCells", []):
+                    yield from _iter_body_paragraphs(cell, in_table=True)
+
+
+def find_text_ranges(
+    doc_data: dict[str, Any],
+    needle: str,
+    limit: int = TEXT_MATCH_LIMIT,
+    context_chars: int = TEXT_MATCH_CONTEXT_CHARS,
+) -> dict[str, Any]:
+    """
+    Locate every occurrence of needle in the body and return its index range.
+
+    Offsets are converted to UTF-16 code units, and inline objects are counted
+    by their index span, so the ranges can be used directly in format_text,
+    update_paragraph_style or comment requests without further arithmetic. The
+    search runs per paragraph, so text spanning a paragraph break does not match.
+    """
+    matches: list[dict[str, Any]] = []
+    count = 0
+    for element, in_table in _iter_body_paragraphs(doc_data.get("body", {})):
+        paragraph = element["paragraph"]
+        text = "".join(
+            _paragraph_element_text(part) for part in paragraph.get("elements", [])
+        )
+        paragraph_start = element.get("startIndex", 0)
+        offset = text.find(needle)
+        while offset != -1:
+            count += 1
+            if len(matches) < limit:
+                start = paragraph_start + utf16_length(text[:offset])
+                context_from = max(0, offset - context_chars)
+                context_to = offset + len(needle) + context_chars
+                matches.append(
+                    {
+                        "start_index": start,
+                        "end_index": start + utf16_length(needle),
+                        "paragraph_start_index": paragraph_start,
+                        "paragraph_end_index": element.get("endIndex", 0),
+                        "in_table": in_table,
+                        "context": text[context_from:context_to].rstrip("\n"),
+                    }
+                )
+            offset = text.find(needle, offset + 1)
+    return {
+        "query": needle,
+        "count": count,
+        "matches": matches,
+        "truncated": count > len(matches),
     }
 
 
