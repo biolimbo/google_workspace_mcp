@@ -261,17 +261,22 @@ def _paragraph_segments(paragraph: dict[str, Any]) -> list[tuple[str, Optional[s
     """Index-aligned text of a paragraph as (text, suggestion kind) segments.
 
     The kind is "insertion" or "deletion" for a text run that belongs to a
-    pending suggestion, else None. Inline objects contribute placeholder
-    characters with no kind.
+    pending suggestion, "mixed" for a run that is both (inserted by one
+    suggestion and deleted by another), else None. Inline objects contribute
+    placeholder characters with no kind.
     """
     segments: list[tuple[str, Optional[str]]] = []
     for part in paragraph.get("elements", []):
         text_run = part.get("textRun")
         kind = None
         if text_run:
-            if text_run.get("suggestedInsertionIds"):
+            inserted = bool(text_run.get("suggestedInsertionIds"))
+            deleted = bool(text_run.get("suggestedDeletionIds"))
+            if inserted and deleted:
+                kind = "mixed"
+            elif inserted:
                 kind = "insertion"
-            elif text_run.get("suggestedDeletionIds"):
+            elif deleted:
                 kind = "deletion"
         segments.append((_paragraph_element_text(part), kind))
     return segments
@@ -311,9 +316,12 @@ def _render_context(
         seg_end = offset + len(text)
         if seg_end > start and offset < end:
             piece = text[max(start - offset, 0) : min(end - offset, len(text))]
-            if piece and kind in SUGGESTION_MARKERS:
-                opening, closing = SUGGESTION_MARKERS[kind]
-                piece = f"{opening}{piece.rstrip(chr(10))}{closing}"
+            if piece and kind is not None:
+                piece = piece.rstrip(chr(10))
+                kinds = ("insertion", "deletion") if kind == "mixed" else (kind,)
+                for marked in kinds:
+                    opening, closing = SUGGESTION_MARKERS[marked]
+                    piece = f"{opening}{piece}{closing}"
             parts.append(piece)
         offset = seg_end
         if offset >= end:
