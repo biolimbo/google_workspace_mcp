@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 
-from gdocs.docs_links import resolve_link_target, text_run_link
+from gdocs.docs_links import resolve_link_target
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,11 @@ SUGGESTION_LEGEND = (
     "> Pending suggestions are shown inline: {++inserted text++}, "
     "{--deleted text--}. Suggested formatting is shown as if accepted.\n\n"
 )
-_SUGGESTION_ID_KEYS = ("suggestedInsertionIds", "suggestedDeletionIds")
+_SUGGESTION_KEYS = (
+    "suggestedInsertionIds",
+    "suggestedDeletionIds",
+    "suggestedTextStyleChanges",
+)
 
 
 def convert_doc_to_markdown(doc: dict[str, Any]) -> str:
@@ -80,9 +84,13 @@ def convert_doc_to_markdown(doc: dict[str, Any]) -> str:
 
 
 def _has_pending_suggestions(node: Any) -> bool:
-    """Whether any text run in the response carries a suggestion id."""
+    """Whether any element in the response carries a pending suggestion.
+
+    Covers inserted and deleted elements as well as style-only suggestions,
+    which the Docs API exposes without insertion or deletion ids.
+    """
     if isinstance(node, dict):
-        if any(node.get(key) for key in _SUGGESTION_ID_KEYS):
+        if any(node.get(key) for key in _SUGGESTION_KEYS):
             return True
         return any(_has_pending_suggestions(value) for value in node.values())
     if isinstance(node, list):
@@ -240,44 +248,72 @@ def _convert_paragraph_text(
     link_start = 0
     for position, elem in enumerate(elements):
         if "textRun" in elem:
-            link = text_run_link(elements, position)
-            if text_run_link(elements, position - 1) != link:
+            link = _effective_text_run_link(elements, position)
+            if _effective_text_run_link(elements, position - 1) != link:
                 link_start = len(parts)
             parts.append(_convert_text_run(elem["textRun"], skip_strikethrough))
             # Link a label split across styled runs once, after its final run.
-            if link and text_run_link(elements, position + 1) != link:
+            if link and _effective_text_run_link(elements, position + 1) != link:
                 parts[link_start:] = [_apply_link("".join(parts[link_start:]), link)]
-        elif "person" in elem:
-            parts.append(_convert_person_chip(elem["person"]))
+            continue
+        if "person" in elem:
+            part = _convert_person_chip(elem["person"])
         elif "richLink" in elem:
-            parts.append(_convert_rich_link_chip(elem["richLink"]))
+            part = _convert_rich_link_chip(elem["richLink"])
         elif "dateElement" in elem:
-            parts.append(_convert_date_chip(elem["dateElement"]))
+            part = _convert_date_chip(elem["dateElement"])
         elif "inlineObjectElement" in elem:
-            parts.append(
-                _convert_inline_object(elem["inlineObjectElement"], inline_objects)
-            )
+            part = _convert_inline_object(elem["inlineObjectElement"], inline_objects)
         elif "footnoteReference" in elem:
-            parts.append(
-                _convert_footnote_reference(
-                    elem["footnoteReference"],
-                    footnotes_meta,
-                    inline_objects,
-                    footnote_defs,
-                    active_footnotes,
-                )
+            part = _convert_footnote_reference(
+                elem["footnoteReference"],
+                footnotes_meta,
+                inline_objects,
+                footnote_defs,
+                active_footnotes,
             )
         elif "horizontalRule" in elem:
-            parts.append("\n---\n")
+            part = "\n---\n"
         elif "autoText" in elem:
-            parts.append(_convert_auto_text(elem["autoText"]))
+            part = _convert_auto_text(elem["autoText"])
         elif "pageBreak" in elem:
-            parts.append("[Page Break]")
+            part = "[Page Break]"
         elif "columnBreak" in elem:
-            parts.append("[Column Break]")
+            part = "[Column Break]"
         elif "equation" in elem:
-            parts.append(_convert_equation(elem["equation"]))
+            part = _convert_equation(elem["equation"])
+        else:
+            continue
+        # Non-text elements carry their suggestion ids on the element itself.
+        parts.append(_mark_suggested(part, elem))
     return "".join(parts).strip()
+
+
+def _mark_suggested(text: str, carrier: dict[str, Any]) -> str:
+    """Wrap rendered text in markers when its carrier is a pending suggestion."""
+    if not text:
+        return text
+    if carrier.get("suggestedDeletionIds"):
+        text = f"{SUGGESTION_DELETE_MARKERS[0]}{text}{SUGGESTION_DELETE_MARKERS[1]}"
+    if carrier.get("suggestedInsertionIds"):
+        text = f"{SUGGESTION_INSERT_MARKERS[0]}{text}{SUGGESTION_INSERT_MARKERS[1]}"
+    return text
+
+
+def _effective_text_run_link(
+    elements: list[dict[str, Any]], index: int
+) -> dict[str, Any] | None:
+    """Link of the text run at ``index`` with pending link suggestions applied.
+
+    Mirrors docs_links.text_run_link, which reads the base style only; grouping
+    on the effective link keeps a suggested link from being dropped or rendered
+    with its old target.
+    """
+    if 0 <= index < len(elements):
+        text_run = elements[index].get("textRun")
+        if text_run is not None:
+            return _effective_text_style(text_run).get("link")
+    return None
 
 
 def _convert_text_run(
@@ -299,12 +335,7 @@ def _convert_text_run(
     if not text:
         return ""
 
-    text = _apply_text_style(text, style, skip_strikethrough)
-    if text_run.get("suggestedDeletionIds"):
-        text = f"{SUGGESTION_DELETE_MARKERS[0]}{text}{SUGGESTION_DELETE_MARKERS[1]}"
-    if text_run.get("suggestedInsertionIds"):
-        text = f"{SUGGESTION_INSERT_MARKERS[0]}{text}{SUGGESTION_INSERT_MARKERS[1]}"
-    return text
+    return _mark_suggested(_apply_text_style(text, style, skip_strikethrough), text_run)
 
 
 def _effective_text_style(text_run: dict[str, Any]) -> dict[str, Any]:
