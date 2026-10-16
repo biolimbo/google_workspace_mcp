@@ -29,6 +29,7 @@ Reads a Google Doc and returns it as Markdown, preserving headings, bold/italic/
 | include_comments | boolean | no | true | Include comments in output |
 | comment_mode | string | no | inline | `inline` (footnote-style at anchor), `appendix` (grouped at bottom), or `none` |
 | include_resolved | boolean | no | false | Include resolved comments |
+| suggestions_view_mode | string | no | DEFAULT_FOR_CURRENT_ACCESS | `SUGGESTIONS_INLINE` marks pending suggestions as `{++inserted++}` / `{--deleted--}` with a legend, and shows suggested formatting as accepted; `PREVIEW_SUGGESTIONS_ACCEPTED` and `PREVIEW_WITHOUT_SUGGESTIONS` resolve them |
 
 ### get_doc_content
 Retrieves plain text content of a Google Doc or a Drive file (.docx, etc.). Native Google Docs use the Docs API; Office files are downloaded and text-extracted via Drive API.

@@ -38,12 +38,27 @@ HEADING_MAP = {
 }
 
 
+# Pending suggestions, as the Docs API returns them in the SUGGESTIONS_INLINE
+# view: the old and new text sit side by side, each run labelled with the
+# suggestion it belongs to. Rendered as CriticMarkup so a reader can tell them
+# apart; the legend precedes the document whenever any appear.
+SUGGESTION_INSERT_MARKERS = ("{++", "++}")
+SUGGESTION_DELETE_MARKERS = ("{--", "--}")
+SUGGESTION_LEGEND = (
+    "> Pending suggestions are shown inline: {++inserted text++}, "
+    "{--deleted text--}. Suggested formatting is shown as if accepted.\n\n"
+)
+_SUGGESTION_ID_KEYS = ("suggestedInsertionIds", "suggestedDeletionIds")
+
+
 def convert_doc_to_markdown(doc: dict[str, Any]) -> str:
     """Convert a Google Docs API document response to markdown.
 
     Supports both legacy (top-level body) and tab-aware responses
     (includeTabsContent=True). For multi-tab docs, each tab gets a
     heading separator. Single-tab docs render without a tab heading.
+    Pending suggestions (SUGGESTIONS_INLINE view) are marked as
+    {++inserted++} and {--deleted--}, with a legend at the top.
 
     Args:
         doc: The document JSON from docs.documents.get()
@@ -54,10 +69,25 @@ def convert_doc_to_markdown(doc: dict[str, Any]) -> str:
     tabs = doc.get("tabs", [])
 
     if tabs:
-        return _convert_tabs_to_markdown(tabs)
+        markdown = _convert_tabs_to_markdown(tabs)
+    else:
+        # Legacy: no tabs, use top-level body/lists/footnotes/inlineObjects
+        markdown = _convert_body_to_markdown(doc)
 
-    # Legacy: no tabs, use top-level body/lists/footnotes/inlineObjects
-    return _convert_body_to_markdown(doc)
+    if _has_pending_suggestions(doc):
+        return SUGGESTION_LEGEND + markdown
+    return markdown
+
+
+def _has_pending_suggestions(node: Any) -> bool:
+    """Whether any text run in the response carries a suggestion id."""
+    if isinstance(node, dict):
+        if any(node.get(key) for key in _SUGGESTION_ID_KEYS):
+            return True
+        return any(_has_pending_suggestions(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_has_pending_suggestions(item) for item in node)
+    return False
 
 
 def _convert_tabs_to_markdown(tabs: list[dict[str, Any]]) -> str:
@@ -253,9 +283,14 @@ def _convert_paragraph_text(
 def _convert_text_run(
     text_run: dict[str, Any], skip_strikethrough: bool = False
 ) -> str:
-    """Convert a single text run to markdown."""
+    """Convert a single text run to markdown.
+
+    A run that belongs to a pending suggestion is wrapped in insertion or
+    deletion markers, and suggested style changes are applied as if accepted,
+    so the SUGGESTIONS_INLINE view does not read as old and new text run together.
+    """
     content = text_run.get("content", "")
-    style = text_run.get("textStyle", {})
+    style = _effective_text_style(text_run)
 
     text = content.rstrip("\n")
     # Replace Google Docs Private Use Area chip placeholders (e.g. \ue907)
@@ -264,7 +299,33 @@ def _convert_text_run(
     if not text:
         return ""
 
-    return _apply_text_style(text, style, skip_strikethrough)
+    text = _apply_text_style(text, style, skip_strikethrough)
+    if text_run.get("suggestedDeletionIds"):
+        text = f"{SUGGESTION_DELETE_MARKERS[0]}{text}{SUGGESTION_DELETE_MARKERS[1]}"
+    if text_run.get("suggestedInsertionIds"):
+        text = f"{SUGGESTION_INSERT_MARKERS[0]}{text}{SUGGESTION_INSERT_MARKERS[1]}"
+    return text
+
+
+def _effective_text_style(text_run: dict[str, Any]) -> dict[str, Any]:
+    """The run's text style with pending style suggestions applied.
+
+    suggestedTextStyleChanges maps a suggestion id to the proposed textStyle and
+    a textStyleSuggestionState whose <field>Suggested flags say which fields the
+    suggestion changes; only those fields are taken from the proposed style.
+    """
+    style = dict(text_run.get("textStyle", {}))
+    for change in text_run.get("suggestedTextStyleChanges", {}).values():
+        suggested = change.get("textStyle", {})
+        for key, flagged in change.get("textStyleSuggestionState", {}).items():
+            if not flagged or not key.endswith("Suggested"):
+                continue
+            field = key[: -len("Suggested")]
+            if field in suggested:
+                style[field] = suggested[field]
+            else:
+                style.pop(field, None)
+    return style
 
 
 def _convert_person_chip(person: dict[str, Any]) -> str:
