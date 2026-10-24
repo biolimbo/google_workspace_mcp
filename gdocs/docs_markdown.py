@@ -20,6 +20,7 @@ import re
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from gdocs.docs_links import resolve_link_target
 
@@ -53,6 +54,7 @@ _SUGGESTION_KEYS = (
     "suggestedInsertionIds",
     "suggestedDeletionIds",
     "suggestedTextStyleChanges",
+    "suggestedDateElementPropertiesChanges",
 )
 
 
@@ -258,7 +260,11 @@ def _convert_paragraph_text(
     for position, elem in enumerate(elements):
         if "textRun" in elem:
             link = _effective_text_run_link(elements, position)
-            if _effective_text_run_link(elements, position - 1) != link:
+            suggestion_ids = _text_run_suggestion_ids(elements, position)
+            if (
+                _effective_text_run_link(elements, position - 1) != link
+                or _text_run_suggestion_ids(elements, position - 1) != suggestion_ids
+            ):
                 link_start = len(parts)
             parts.append(_convert_text_run(elem["textRun"], skip_strikethrough))
             color = _text_run_color(elements, position) if include_colors else None
@@ -271,13 +277,21 @@ def _convert_paragraph_text(
                 and color_visible
                 and _text_run_color(elements, position + 1) != color
             )
-            # Link a label split across styled runs once, after its final run
-            # or before a color note.
+            # Build the whole link before marking it, keeping ordinary text
+            # and different suggestions in separate links.
             if link and (
-                color_ends or _effective_text_run_link(elements, position + 1) != link
+                color_ends
+                or _effective_text_run_link(elements, position + 1) != link
+                or _text_run_suggestion_ids(elements, position + 1) != suggestion_ids
             ):
-                parts[link_start:] = [_apply_link("".join(parts[link_start:]), link)]
+                parts[link_start:] = [
+                    _mark_suggested(
+                        _apply_link("".join(parts[link_start:]), link), elem["textRun"]
+                    )
+                ]
                 link_start = len(parts)
+            elif not link:
+                parts[-1] = _mark_suggested(parts[-1], elem["textRun"])
             if color_ends:
                 label = parts[-1].rstrip()
                 parts[-1] = f"{label} [color: {color}]{parts[-1][len(label) :]}"
@@ -358,9 +372,8 @@ def _convert_text_run(
 ) -> str:
     """Convert a single text run to markdown.
 
-    A run that belongs to a pending suggestion is wrapped in insertion or
-    deletion markers, and suggested style changes are applied as if accepted,
-    so the SUGGESTIONS_INLINE view does not read as old and new text run together.
+    Suggested style changes are applied as if accepted. Paragraph conversion
+    adds insertion/deletion markers after assembling any complete links.
     """
     content = text_run.get("content", "")
     style = _effective_text_style(text_run)
@@ -372,7 +385,20 @@ def _convert_text_run(
     if not text:
         return ""
 
-    return _mark_suggested(_apply_text_style(text, style, skip_strikethrough), text_run)
+    return _apply_text_style(text, style, skip_strikethrough)
+
+
+def _text_run_suggestion_ids(
+    elements: list[dict[str, Any]], index: int
+) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    """Identify suggestion boundaries while grouping a linked label's runs."""
+    if 0 <= index < len(elements) and "textRun" in elements[index]:
+        run = elements[index]["textRun"]
+        return (
+            tuple(run.get("suggestedInsertionIds", [])),
+            tuple(run.get("suggestedDeletionIds", [])),
+        )
+    return None
 
 
 def _effective_text_style(text_run: dict[str, Any]) -> dict[str, Any]:
@@ -425,10 +451,27 @@ def _convert_rich_link_chip(rich_link: dict[str, Any]) -> str:
 def _convert_date_chip(date_elem: dict[str, Any]) -> str:
     """Convert a date smart chip (dateElement) to markdown.
 
-    Date elements contain dateElementProperties with displayText (the
-    locale-formatted string) and a timestamp.
+    Apply flagged property suggestions before using Google's displayText.
+    A changed date without fresh displayText uses an ISO date/time fallback;
+    this fallback does not reproduce locale-specific date formatting.
     """
-    props = date_elem.get("dateElementProperties", {})
+    props = dict(date_elem.get("dateElementProperties", {}))
+    for change in date_elem.get("suggestedDateElementPropertiesChanges", {}).values():
+        suggested = change.get("dateElementProperties", {})
+        state = change.get("dateElementPropertiesSuggestionState", {})
+        changed = False
+        for field in ("timestamp", "timeZoneId", "locale", "dateFormat", "timeFormat"):
+            if state.get(f"{field}Suggested"):
+                changed = True
+                if field in suggested:
+                    props[field] = suggested[field]
+                else:
+                    props.pop(field, None)
+        if changed:
+            # The base displayText was derived from the old properties.
+            props.pop("displayText", None)
+            if suggested.get("displayText"):
+                props["displayText"] = suggested["displayText"]
     display_text = props.get("displayText", "")
     if display_text:
         return display_text
@@ -437,8 +480,19 @@ def _convert_date_chip(date_elem: dict[str, Any]) -> str:
     if timestamp:
         try:
             dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-            return dt.strftime("%Y-%m-%d")
-        except (ValueError, TypeError):
+            dt = dt.replace(tzinfo=dt.tzinfo or ZoneInfo("UTC"))
+            dt = dt.astimezone(ZoneInfo(props.get("timeZoneId") or "UTC"))
+            text = dt.strftime("%Y-%m-%d")
+            time_format = props.get("timeFormat")
+            if time_format in (
+                "TIME_FORMAT_HOUR_MINUTE",
+                "TIME_FORMAT_HOUR_MINUTE_TIMEZONE",
+            ):
+                text += dt.strftime(" %H:%M")
+                if time_format == "TIME_FORMAT_HOUR_MINUTE_TIMEZONE":
+                    text += f" {dt.tzname()}"
+            return text
+        except (ValueError, TypeError, ZoneInfoNotFoundError):
             return timestamp
     return ""
 

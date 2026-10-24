@@ -1,9 +1,12 @@
 """Tests for rendering pending suggestions in the Markdown converter."""
 
 import os
+import re
 import sys
+from copy import deepcopy
 
 import pytest
+from markdown_it import MarkdownIt
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
@@ -41,6 +44,202 @@ SUGGESTED_DOC = _doc(
         _run(".\n"),
     ]
 )
+
+
+class TestDatePropertySuggestions:
+    @pytest.mark.parametrize(
+        "proposed,state,expected",
+        [
+            (
+                {"timestamp": "2026-10-21T00:30:00Z"},
+                {"timestampSuggested": True},
+                "2026-10-21",
+            ),
+            (
+                {
+                    "timestamp": "2026-10-21T00:30:00Z",
+                    "displayText": "Oct 21, 2026",
+                },
+                {"timestampSuggested": True},
+                "Oct 21, 2026",
+            ),
+            (
+                {"timeZoneId": "America/Bogota"},
+                {"timeZoneIdSuggested": True},
+                "2026-10-19",
+            ),
+            (
+                {"timeFormat": "TIME_FORMAT_HOUR_MINUTE"},
+                {"timeFormatSuggested": True},
+                "2026-10-20 00:30",
+            ),
+            (
+                {"timeFormat": "TIME_FORMAT_HOUR_MINUTE_TIMEZONE"},
+                {"timeFormatSuggested": True},
+                "2026-10-20 00:30 UTC",
+            ),
+            (
+                {"timestamp": "2099-01-01T00:00:00Z"},
+                {"timestampSuggested": False},
+                "Oct 20, 2026",
+            ),
+            (
+                {"timestamp": "2099-01-01T00:00:00Z", "displayText": "Wrong date"},
+                {},
+                "Oct 20, 2026",
+            ),
+            (
+                {"locale": "es", "timestamp": "2099-01-01T00:00:00Z"},
+                {"localeSuggested": True, "timestampSuggested": False},
+                "2026-10-20",
+            ),
+        ],
+    )
+    def test_date_property_suggestions_use_flagged_values(
+        self, proposed, state, expected
+    ):
+        doc = _doc(
+            [
+                {
+                    "dateElement": {
+                        "dateElementProperties": {
+                            "displayText": "Oct 20, 2026",
+                            "timestamp": "2026-10-20T00:30:00Z",
+                        },
+                        "suggestedDateElementPropertiesChanges": {
+                            "s": {
+                                "dateElementProperties": proposed,
+                                "dateElementPropertiesSuggestionState": state,
+                            }
+                        },
+                    }
+                }
+            ]
+        )
+        original = deepcopy(doc)
+
+        assert convert_doc_to_markdown(doc) == SUGGESTION_LEGEND + expected + "\n"
+        assert doc == original
+
+    def test_later_suggestion_does_not_reuse_earlier_display_text(self):
+        doc = _doc(
+            [
+                {
+                    "dateElement": {
+                        "dateElementProperties": {
+                            "timestamp": "2026-10-20T00:00:00Z",
+                            "displayText": "Oct 20, 2026",
+                        },
+                        "suggestedDateElementPropertiesChanges": {
+                            "first": {
+                                "dateElementProperties": {
+                                    "timestamp": "2026-10-21T00:00:00Z",
+                                    "displayText": "Oct 21, 2026",
+                                },
+                                "dateElementPropertiesSuggestionState": {
+                                    "timestampSuggested": True
+                                },
+                            },
+                            "second": {
+                                "dateElementProperties": {
+                                    "timestamp": "2026-10-22T00:00:00Z"
+                                },
+                                "dateElementPropertiesSuggestionState": {
+                                    "timestampSuggested": True
+                                },
+                            },
+                        },
+                    }
+                }
+            ]
+        )
+
+        assert convert_doc_to_markdown(doc) == SUGGESTION_LEGEND + "2026-10-22\n"
+
+
+class TestLinkedSuggestionBoundaries:
+    @pytest.mark.parametrize(
+        "ids,opening,closing",
+        [
+            ({"suggestedInsertionIds": ["s"]}, "{++", "++}"),
+            ({"suggestedDeletionIds": ["s"]}, "{--", "--}"),
+            (
+                {"suggestedInsertionIds": ["s"], "suggestedDeletionIds": ["t"]},
+                "{++{--",
+                "--}++}",
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("include_colors", [False, True])
+    def test_markers_enclose_the_complete_styled_link(
+        self, ids, opening, closing, include_colors
+    ):
+        style = {"link": {"url": "https://example.com"}}
+        if include_colors:
+            style["foregroundColor"] = {"color": {"rgbColor": {"red": 1.0}}}
+        doc = _doc(
+            [
+                _run("the ", style, **ids),
+                _run("docs", {**style, "bold": True}, **ids),
+            ]
+        )
+
+        markdown = convert_doc_to_markdown(doc, include_colors=include_colors)
+
+        color = " [color: #ff0000]" if include_colors else ""
+        assert markdown == (
+            SUGGESTION_LEGEND
+            + f"{opening}[the **docs**](https://example.com){closing}{color}\n"
+        )
+        if not include_colors and len(ids) == 1:
+            # Removing the marked insertion/deletion must remove its URL too.
+            body = markdown.removeprefix(SUGGESTION_LEGEND)
+            removed = re.sub(re.escape(opening) + r".*?" + re.escape(closing), "", body)
+            assert removed.strip() == ""
+            assert "[](https://example.com)" not in removed
+
+    def test_link_is_split_at_distinct_suggestion_boundaries(self):
+        style = {"link": {"url": "https://example.com"}}
+        doc = _doc(
+            [
+                _run("Plain", style),
+                _run("First", style, suggestedInsertionIds=["first"]),
+                _run("Second", style, suggestedInsertionIds=["second"]),
+                _run("Deleted", style, suggestedDeletionIds=["deleted"]),
+                _run("End", style),
+            ]
+        )
+
+        markdown = convert_doc_to_markdown(doc)
+
+        assert markdown == SUGGESTION_LEGEND + (
+            "[Plain](https://example.com)"
+            "{++[First](https://example.com)++}"
+            "{++[Second](https://example.com)++}"
+            "{--[Deleted](https://example.com)--}"
+            "[End](https://example.com)\n"
+        )
+        body = markdown.removeprefix(SUGGESTION_LEGEND)
+        accepted = re.sub(r"\{--.*?--\}", "", body)
+        accepted = re.sub(r"\{\+\+(.*?)\+\+\}", r"\1", accepted)
+        tokens = MarkdownIt().parseInline(accepted.strip())[0].children
+        assert sum(token.type == "link_open" for token in tokens) == 4
+        assert "".join(token.content for token in tokens) == "PlainFirstSecondEnd"
+
+    def test_internal_link_target_is_inside_the_marker(self):
+        doc = _doc(
+            [
+                _run(
+                    "Heading",
+                    {"link": {"heading": {"id": "h.1", "tabId": "t.1"}}},
+                    suggestedDeletionIds=["s"],
+                )
+            ]
+        )
+
+        assert convert_doc_to_markdown(doc) == (
+            SUGGESTION_LEGEND + "{--Heading [heading: h.1, tab: t.1]--}\n"
+        )
 
 
 class TestSuggestionMarkers:
