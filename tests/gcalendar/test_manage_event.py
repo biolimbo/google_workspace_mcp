@@ -16,11 +16,13 @@ from pydantic import TypeAdapter
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from core.utils import UserInputError, handle_http_errors
-from gcalendar.calendar_tools import (
+from gcalendar.calendar_helpers import (
     _build_addon_conference_data,
+    _resolve_conference_data,
+)
+from gcalendar.calendar_tools import (
     _create_event_impl,
     _modify_event_impl,
-    _resolve_conference_data,
     manage_event,
 )
 
@@ -199,19 +201,19 @@ def test_resolve_conference_data_returns_none_when_nothing_requested():
 
 
 def test_resolve_conference_data_rejects_helper_without_uri():
-    with pytest.raises(ValueError):
+    with pytest.raises(UserInputError):
         _resolve_conference_data(None, "zoom", None, None, None, None)
 
 
 def test_resolve_conference_data_rejects_raw_and_helper_combined():
-    with pytest.raises(ValueError):
+    with pytest.raises(UserInputError):
         _resolve_conference_data(
             {"a": 1}, "zoom", "https://zoom.us/j/1", None, None, None
         )
 
 
 def test_resolve_conference_data_rejects_conflict_with_google_meet():
-    with pytest.raises(ValueError):
+    with pytest.raises(UserInputError):
         _resolve_conference_data(
             None, "zoom", "https://zoom.us/j/1", None, None, add_google_meet=True
         )
@@ -290,7 +292,7 @@ async def test_modify_event_attaches_conference_data():
 @pytest.mark.asyncio
 async def test_manage_event_rejects_conference_helper_without_uri():
     fn = _unwrap(manage_event)
-    with pytest.raises(ValueError, match="conference_provider and conference_uri"):
+    with pytest.raises(UserInputError, match="conference_provider and conference_uri"):
         await fn(
             service=Mock(),
             user_google_email="user@example.com",
@@ -306,7 +308,7 @@ async def test_manage_event_rejects_conference_helper_without_uri():
 @pytest.mark.parametrize("action", ["create", "update", "delete", "rsvp"])
 async def test_manage_event_rejects_invalid_send_updates(action):
     fn = _unwrap(manage_event)
-    with pytest.raises(ValueError, match="Invalid send_updates 'invalid'"):
+    with pytest.raises(UserInputError, match="Invalid send_updates 'invalid'"):
         await fn(
             service=Mock(),
             user_google_email="user@example.com",
@@ -433,7 +435,7 @@ async def test_manage_event_create_action_routes_attendee_objects():
 async def test_create_event_rejects_attendee_without_email():
     mock_service = _create_mock_service()
 
-    with pytest.raises(ValueError, match="'email' key"):
+    with pytest.raises(UserInputError, match="'email' key"):
         await _create_event_impl(
             service=mock_service,
             user_google_email="user@example.com",
@@ -448,7 +450,7 @@ async def test_create_event_rejects_attendee_without_email():
 async def test_modify_event_rejects_attendee_without_email():
     mock_service = _create_mock_service()
 
-    with pytest.raises(ValueError, match="'email' key"):
+    with pytest.raises(UserInputError, match="'email' key"):
         await _modify_event_impl(
             service=mock_service,
             user_google_email="user@example.com",
@@ -468,7 +470,7 @@ async def test_manage_event_attendee_errors_are_user_input(action, invalid_atten
         _unwrap(manage_event)
     )
 
-    with pytest.raises(UserInputError, match="'email' key") as exc_info:
+    with pytest.raises(UserInputError, match="'email' key"):
         await fn(
             service=mock_service,
             user_google_email="user@example.com",
@@ -480,26 +482,22 @@ async def test_manage_event_attendee_errors_are_user_input(action, invalid_atten
             attendees=["kept@example.com", invalid_attendee],
         )
 
-    assert isinstance(exc_info.value, ValueError)
     assert mock_service.mock_calls == []
 
 
 @pytest.mark.asyncio
-async def test_manage_event_unrelated_value_error_keeps_existing_handling():
+async def test_manage_event_validation_errors_are_user_input():
     fn = handle_http_errors("manage_event", service_type="calendar")(
         _unwrap(manage_event)
     )
 
-    with pytest.raises(Exception, match="An unexpected error occurred") as exc_info:
+    with pytest.raises(UserInputError, match="Invalid send_updates"):
         await fn(
             service=Mock(),
             user_google_email="user@example.com",
             action="create",
             send_updates="invalid",
         )
-
-    assert isinstance(exc_info.value.__cause__, ValueError)
-    assert not isinstance(exc_info.value.__cause__, UserInputError)
 
 
 @pytest.mark.parametrize(
@@ -521,3 +519,50 @@ def test_manage_event_attendees_schema_accepts_mixed_and_json_string(raw, expect
     )
 
     assert TypeAdapter(annotation).validate_python(raw) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["create", "update"])
+@pytest.mark.parametrize(
+    "color, expected", [("Tomato", "11"), (" basil ", "10"), ("5", "5")]
+)
+async def test_manage_event_resolves_color_names_and_ids(action, color, expected):
+    mock_service = _create_mock_service()
+
+    await _unwrap(manage_event)(
+        service=mock_service,
+        user_google_email="user@example.com",
+        action=action,
+        event_id="evt123",
+        summary="Meeting",
+        start_time="2026-04-06T09:00:00Z",
+        end_time="2026-04-06T09:30:00Z",
+        color_id=color,
+    )
+
+    write = (
+        mock_service.events().insert
+        if action == "create"
+        else mock_service.events().patch
+    )
+    assert write.call_args[1]["body"]["colorId"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("color", ["chartreuse", "0", "12"])
+async def test_manage_event_rejects_unknown_color(color):
+    mock_service = _create_mock_service()
+    mock_service.reset_mock()
+
+    with pytest.raises(UserInputError, match="tomato \\(11\\)"):
+        await _unwrap(manage_event)(
+            service=mock_service,
+            user_google_email="user@example.com",
+            action="create",
+            summary="Meeting",
+            start_time="2026-04-06T09:00:00Z",
+            end_time="2026-04-06T09:30:00Z",
+            color_id=color,
+        )
+
+    assert mock_service.mock_calls == []
