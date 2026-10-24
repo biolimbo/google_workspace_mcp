@@ -1742,9 +1742,12 @@ async def inspect_doc_structure(
 
     SUB-PARAGRAPH FORMATTING:
     Pass find_text to get the exact start_index and end_index of every occurrence
-    of a phrase in the inspected tab's body, table cells included, under
-    text_matches. Those ranges go straight into format_text,
-    update_paragraph_style or delete_text operations; no offset arithmetic needed.
+    of a phrase in the inspected tab's body, including table cells and tables of
+    contents, under text_matches. Those ranges go straight into format_text,
+    update_paragraph_style or delete_text operations without offset arithmetic.
+    For delete_text, exclude protected final newlines of a body, table cell or
+    table of contents. A newline immediately before a table, table of contents
+    or section break can only be deleted together with that structural element.
     Without find_text, text_preview is truncated to 100 characters by default; pass
     preview_chars=0 or None for untruncated text and add the token's UTF-16 offset
     within that text to the paragraph's start_index (non-BMP characters such as

@@ -315,7 +315,7 @@ Returns document structure metadata: element count, total length, table position
 | document_id | string | yes | | |
 | detailed | boolean | no | false | Return detailed structure info |
 | tab_id | string | no | | Inspect a specific tab (default: main document) |
-| find_text | string | no | | Locate literal text in the inspected tab's body (table cells included); adds `text_matches` |
+| find_text | string | no | | Locate literal text in the inspected tab's body (table cells and tables of contents included); adds `text_matches` |
 | preview_chars | integer | no | 100 | Max characters of paragraph/header/footer text previews; `0` or null for full text (needed to locate a token inside a long paragraph) |
 
 Key output fields:
@@ -328,6 +328,8 @@ Key output fields:
 - `empty_paragraphs` -- newline-only body paragraph count, excluding existing or suggested object anchors
 - `empty_paragraph_ranges` / `empty_paragraph_ranges_truncated` -- first 100 start/end extents and whether more exist
 - `last_paragraph` -- `is_list_item` and `is_empty`, or null if no body paragraphs
+
+Matches retain paragraph-ending newlines. Before using a match with `delete_text`, exclude protected final newlines in bodies, table cells and tables of contents. A newline before a table, table of contents or section break can only be deleted together with that structural element.
 
 Paragraph statistics exclude nested paragraphs and appear at the top level in basic
 mode, under `statistics` in detailed mode. Before cleanup, use `detailed=true` to

@@ -243,7 +243,7 @@ def _parse_segment(
 def _iter_body_paragraphs(
     body: dict[str, Any], in_table: bool = False
 ) -> Iterator[tuple[dict[str, Any], bool]]:
-    """Yield (structural element, in_table) for every paragraph, table cells included."""
+    """Yield body paragraphs, including table cells and tables of contents."""
     for element in body.get("content", []):
         if "paragraph" in element:
             yield element, in_table
@@ -251,6 +251,8 @@ def _iter_body_paragraphs(
             for row in element["table"].get("tableRows", []):
                 for cell in row.get("tableCells", []):
                     yield from _iter_body_paragraphs(cell, in_table=True)
+        elif "tableOfContents" in element:
+            yield from _iter_body_paragraphs(element["tableOfContents"], in_table)
 
 
 def validate_find_text(find_text: Optional[str]) -> Optional[str]:
@@ -339,7 +341,7 @@ def find_text_ranges(
     context_chars: int = TEXT_MATCH_CONTEXT_CHARS,
 ) -> dict[str, Any]:
     """
-    Locate every occurrence of needle in the body and return its index range.
+    Locate needle in body paragraphs, table cells and tables of contents.
 
     Offsets are converted to UTF-16 code units, and inline objects are counted
     by their index span, so the ranges can be used directly in format_text,
