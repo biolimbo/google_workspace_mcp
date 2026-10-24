@@ -624,6 +624,7 @@ async def _modify_doc_text_by_heading(
     end_of_segment: bool,
     formatting_params: list,
     validator: ValidationManager,
+    write_mode: str,
 ) -> str:
     """Replace, append to, or format the section under ``heading`` in one guarded write."""
     has_formatting = any(p is not None for p in formatting_params)
@@ -677,12 +678,18 @@ async def _modify_doc_text_by_heading(
         verb = "Appended to" if end_of_segment or body_is_empty else "Replaced"
         operation = f"{verb} section under heading {heading!r}"
 
-    body: dict[str, Any] = {"requests": requests}
+    body = build_batch_update_body(requests, write_mode)
     if doc.get("revisionId"):
-        body["writeControl"] = {"requiredRevisionId": doc["revisionId"]}
-    await asyncio.to_thread(
+        body.setdefault("writeControl", {})["requiredRevisionId"] = doc["revisionId"]
+    result = await asyncio.to_thread(
         service.documents().batchUpdate(documentId=document_id, body=body).execute
     )
+    save_error = suggestion_save_error(result, write_mode)
+    if save_error:
+        return f"Error: {save_error}"
+
+    if write_mode == "SUGGEST":
+        operation = f"Suggested: {operation}"
     link = f"https://docs.google.com/document/d/{document_id}/edit"
     return f"{operation} in document {document_id}. Link: {link}"
 
@@ -824,6 +831,7 @@ async def modify_doc_text(
             end_of_segment,
             formatting_params,
             validator,
+            write_mode,
         )
     if start_index is None:
         return "Error: 'start_index' is required unless 'heading' is provided."
