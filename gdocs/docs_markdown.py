@@ -283,16 +283,21 @@ def _convert_paragraph_text(
                 parts[-1] = f"{label} [color: {color}]{parts[-1][len(label) :]}"
             continue
         if "person" in elem:
-            part = _convert_person_chip(elem["person"])
+            carrier = elem["person"]
+            part = _convert_person_chip(carrier)
         elif "richLink" in elem:
-            part = _convert_rich_link_chip(elem["richLink"])
+            carrier = elem["richLink"]
+            part = _convert_rich_link_chip(carrier)
         elif "dateElement" in elem:
-            part = _convert_date_chip(elem["dateElement"])
+            carrier = elem["dateElement"]
+            part = _convert_date_chip(carrier)
         elif "inlineObjectElement" in elem:
-            part = _convert_inline_object(elem["inlineObjectElement"], inline_objects)
+            carrier = elem["inlineObjectElement"]
+            part = _convert_inline_object(carrier, inline_objects)
         elif "footnoteReference" in elem:
+            carrier = elem["footnoteReference"]
             part = _convert_footnote_reference(
-                elem["footnoteReference"],
+                carrier,
                 footnotes_meta,
                 inline_objects,
                 footnote_defs,
@@ -300,19 +305,24 @@ def _convert_paragraph_text(
                 include_colors=include_colors,
             )
         elif "horizontalRule" in elem:
+            carrier = elem["horizontalRule"]
             part = "\n---\n"
         elif "autoText" in elem:
-            part = _convert_auto_text(elem["autoText"])
+            carrier = elem["autoText"]
+            part = _convert_auto_text(carrier)
         elif "pageBreak" in elem:
+            carrier = elem["pageBreak"]
             part = "[Page Break]"
         elif "columnBreak" in elem:
+            carrier = elem["columnBreak"]
             part = "[Column Break]"
         elif "equation" in elem:
-            part = _convert_equation(elem["equation"])
+            carrier = elem["equation"]
+            part = _convert_equation(carrier)
         else:
             continue
-        # Non-text elements carry their suggestion ids on the element itself.
-        parts.append(_mark_suggested(part, elem))
+        # Suggestion IDs belong to the typed payload, as they do for textRun.
+        parts.append(_mark_suggested(part, carrier))
     return "".join(parts).strip()
 
 

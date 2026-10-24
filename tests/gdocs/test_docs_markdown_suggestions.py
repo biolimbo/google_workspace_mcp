@@ -44,6 +44,55 @@ SUGGESTED_DOC = _doc(
 
 
 class TestSuggestionMarkers:
+    @pytest.mark.parametrize(
+        "kind,payload,rendered",
+        [
+            (
+                "person",
+                {"personProperties": {"name": "Ana", "email": "ana@example.com"}},
+                "[Ana](mailto:ana@example.com)",
+            ),
+            (
+                "richLink",
+                {"richLinkProperties": {"title": "Docs", "uri": "https://example.com"}},
+                "[Docs](https://example.com)",
+            ),
+            (
+                "dateElement",
+                {"dateElementProperties": {"displayText": "Oct 20"}},
+                "Oct 20",
+            ),
+            ("inlineObjectElement", {"inlineObjectId": "img-1"}, "[Image: Picture]"),
+            ("footnoteReference", {"footnoteId": "fn-1"}, "[^fn-1]"),
+            ("horizontalRule", {}, "\n---\n"),
+            ("autoText", {"type": "PAGE_NUMBER"}, "[Page #]"),
+            ("pageBreak", {}, "[Page Break]"),
+            ("columnBreak", {}, "[Column Break]"),
+            ("equation", {}, "[Equation]"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "suggestion_ids,opening,closing",
+        [
+            ({"suggestedInsertionIds": ["s"]}, "{++", "++}"),
+            ({"suggestedDeletionIds": ["s"]}, "{--", "--}"),
+        ],
+    )
+    def test_non_text_suggestions_use_ids_from_the_nested_payload(
+        self, kind, payload, rendered, suggestion_ids, opening, closing
+    ):
+        doc = _doc([{kind: {**payload, **suggestion_ids}}])
+        doc["inlineObjects"] = {
+            "img-1": {
+                "inlineObjectProperties": {"embeddedObject": {"title": "Picture"}}
+            }
+        }
+
+        markdown = convert_doc_to_markdown(doc)
+
+        assert markdown.startswith(SUGGESTION_LEGEND)
+        assert opening + rendered + closing in markdown
+
     def test_insertion_and_deletion_are_marked(self):
         markdown = convert_doc_to_markdown(SUGGESTED_DOC)
 
@@ -310,9 +359,9 @@ class TestReviewFollowUps:
                 _run("Ask "),
                 {
                     "person": {
-                        "personProperties": {"name": "Ana", "email": "ana@example.com"}
+                        "personProperties": {"name": "Ana", "email": "ana@example.com"},
+                        "suggestedDeletionIds": ["s"],
                     },
-                    "suggestedDeletionIds": ["s"],
                 },
                 _run(".\n"),
             ]
@@ -327,8 +376,10 @@ class TestReviewFollowUps:
             [
                 _run("Due "),
                 {
-                    "dateElement": {"dateElementProperties": {"displayText": "Oct 20"}},
-                    "suggestedInsertionIds": ["s"],
+                    "dateElement": {
+                        "dateElementProperties": {"displayText": "Oct 20"},
+                        "suggestedInsertionIds": ["s"],
+                    },
                 },
                 _run("\n"),
             ]
