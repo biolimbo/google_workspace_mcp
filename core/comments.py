@@ -51,6 +51,8 @@ async def _manage_comment_dispatch(
 ) -> str:
     """Route comment management actions to the appropriate implementation."""
     action_lower = action.lower().strip()
+    if anchor_text is not None and not anchor_text.strip():
+        raise ValueError("anchor_text must not be empty")
     if cell and action_lower in ("reply", "resolve"):
         raise ValueError("cell is only supported for the create action")
     if (anchor_text or tab_id) and action_lower in ("reply", "resolve"):
@@ -167,10 +169,11 @@ def create_comment_tools(
 
             Actions:
               - create: Create a new comment. Requires comment_content. Pass
-                anchor_text (literal text that occurs exactly once in the tab,
-                table cells included) to anchor the comment to that text in the
-                margin, as the Docs editor does; otherwise it is a document-level
-                comment. tab_id picks the tab to search; the first tab by default.
+                anchor_text (literal text within one paragraph that occurs exactly
+                once in the tab, table cells included) to anchor the comment to
+                that text in the margin, as the Docs editor does; otherwise it is
+                a document-level comment. tab_id picks the tab to search; the
+                first tab by default.
               - reply: Reply to a comment. Requires comment_id and comment_content.
               - resolve: Resolve a comment. Requires comment_id.
             """

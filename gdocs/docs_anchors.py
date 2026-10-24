@@ -114,12 +114,13 @@ def resolve_anchor_text(body: dict[str, Any], anchor: str, position: str) -> int
 
 def resolve_anchor_range(body: dict[str, Any], anchor: str) -> tuple[int, int]:
     """
-    Resolve literal text to the (start_index, end_index) range it occupies.
+    Resolve literal text within one paragraph to its (start_index, end_index).
 
     Unlike resolve_anchor_text, which yields one insertion point, this returns
     the whole span, which is what a comment or a style change is tied to. Text
     inside table cells is searched too. The anchor must occur exactly once; an
-    empty anchor is refused because it would match everywhere.
+    empty anchor is refused because it would match everywhere. Text spanning
+    multiple paragraphs is not supported.
     """
     if not anchor or not anchor.strip():
         raise AnchorResolutionError("anchor_text must not be empty.")

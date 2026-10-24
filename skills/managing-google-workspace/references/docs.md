@@ -301,10 +301,10 @@ Create, reply to, or resolve a comment. A comment created with `anchor_text` is 
 | action | string | yes | | `create`, `reply`, or `resolve` |
 | comment_content | string | no | | Required for `create` and `reply`; anchored comments are capped at 2048 UTF-8 bytes |
 | comment_id | string | no | | Required for `reply` and `resolve` |
-| anchor_text | string | no | | `create` only. Literal text that occurs exactly once in the tab (table cells included); the comment anchors to it |
+| anchor_text | string | no | | `create` only. Nonblank literal text within one paragraph, occurring exactly once in the tab (table cells included); the comment anchors to it |
 | tab_id | string | no | | `create` only, with `anchor_text`. Tab to search; the first tab by default |
 
-Tip: pick an anchor long enough to be unique. An anchor that matches several places, or none, is refused before anything is written.
+Tip: pick an anchor contained in one paragraph and unique across the tab. An anchor that matches several places, or none, is refused before anything is written. Omit `anchor_text` for a document-level comment; an explicitly blank anchor is rejected.
 
 ---
 
