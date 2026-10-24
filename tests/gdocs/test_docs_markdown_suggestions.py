@@ -3,6 +3,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from gdocs.docs_markdown import SUGGESTION_LEGEND, convert_doc_to_markdown
@@ -163,6 +165,82 @@ class TestSuggestedTextStyle:
 
 
 class TestReviewFollowUps:
+    @pytest.mark.parametrize("location", ["body", "tab", "table", "footnote"])
+    def test_colored_suggestion_survives_document_containers(self, location):
+        doc = _doc(
+            [
+                _run(
+                    "new words",
+                    {"foregroundColor": {"color": {"rgbColor": {"red": 1.0}}}},
+                    suggestedInsertionIds=["s"],
+                )
+            ]
+        )
+        if location == "tab":
+            doc = {"tabs": [{"documentTab": doc}]}
+        elif location == "table":
+            doc = {
+                "body": {
+                    "content": [
+                        {"table": {"tableRows": [{"tableCells": [doc["body"]]}]}}
+                    ]
+                }
+            }
+        elif location == "footnote":
+            footnote = doc["body"]
+            doc = _doc([{"footnoteReference": {"footnoteId": "f1"}}])
+            doc["footnotes"] = {"f1": footnote}
+
+        markdown = convert_doc_to_markdown(doc, include_colors=True)
+
+        assert markdown.startswith(SUGGESTION_LEGEND)
+        assert "{++new words++} [color: #ff0000]" in markdown
+
+    def test_suggested_link_stays_grouped_with_color_annotation(self):
+        color = {"foregroundColor": {"color": {"rgbColor": {"red": 1.0}}}}
+        change = {
+            "s": {
+                "textStyle": {"link": {"url": "https://example.com"}},
+                "textStyleSuggestionState": {"linkSuggested": True},
+            }
+        }
+        doc = _doc(
+            [
+                _run("the ", color, suggestedTextStyleChanges=change),
+                _run("docs", {**color, "bold": True}, suggestedTextStyleChanges=change),
+            ]
+        )
+
+        markdown = convert_doc_to_markdown(doc, include_colors=True)
+
+        assert "[the **docs**](https://example.com) [color: #ff0000]" in markdown
+
+    def test_suggested_foreground_color_is_rendered_as_accepted(self):
+        doc = _doc(
+            [
+                _run(
+                    "dog",
+                    {"foregroundColor": {"color": {"rgbColor": {"red": 1.0}}}},
+                    suggestedTextStyleChanges={
+                        "s": {
+                            "textStyle": {
+                                "foregroundColor": {
+                                    "color": {"rgbColor": {"blue": 1.0}}
+                                }
+                            },
+                            "textStyleSuggestionState": {
+                                "foregroundColorSuggested": True
+                            },
+                        }
+                    },
+                )
+            ]
+        )
+
+        markdown = convert_doc_to_markdown(doc, include_colors=True)
+
+        assert markdown == SUGGESTION_LEGEND + "dog [color: #0000ff]\n"
+
     def test_style_only_suggestion_gets_the_legend(self):
         doc = _doc(
             [
