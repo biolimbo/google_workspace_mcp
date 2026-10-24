@@ -470,7 +470,8 @@ def _convert_footnote_reference(
 ) -> str:
     """Convert a footnote reference to a markdown footnote marker.
 
-    Also collects the footnote definition text for appending at the end.
+    Also collects the definition text with the reference's suggestion markers
+    for appending at the end.
     """
     fn_id = ref.get("footnoteId", "")
     if not fn_id:
@@ -491,7 +492,7 @@ def _convert_footnote_reference(
                     active_footnotes=next_active,
                     include_colors=include_colors,
                 )
-                footnote_defs.append((fn_id, fn_text))
+                footnote_defs.append((fn_id, _mark_suggested(fn_text, ref)))
     return f"[^{fn_id}]"
 
 

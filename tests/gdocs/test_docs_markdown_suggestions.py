@@ -134,6 +134,41 @@ class TestSuggestionMarkers:
         assert "{--lazy dog--}" in markdown
 
 
+class TestFootnoteSuggestions:
+    @pytest.mark.parametrize(
+        "suggestion_ids,opening,closing",
+        [
+            ({}, "", ""),
+            ({"suggestedInsertionIds": ["s"]}, "{++", "++}"),
+            ({"suggestedDeletionIds": ["s"]}, "{--", "--}"),
+            (
+                {"suggestedInsertionIds": ["a"], "suggestedDeletionIds": ["b"]},
+                "{++{--",
+                "--}++}",
+            ),
+        ],
+    )
+    def test_populated_definition_inherits_reference_suggestion(
+        self, suggestion_ids, opening, closing
+    ):
+        """References and definitions share their pending suggestion markers."""
+        doc = _doc(
+            [
+                _run("Text"),
+                {"footnoteReference": {"footnoteId": "fn-1", **suggestion_ids}},
+            ]
+        )
+        doc["footnotes"] = {
+            "fn-1": _doc([_run("Footnote detail\n", {"bold": True})])["body"]
+        }
+
+        markdown = convert_doc_to_markdown(doc)
+
+        assert f"Text{opening}[^fn-1]{closing}" in markdown
+        assert f"[^fn-1]: {opening}**Footnote detail**{closing}" in markdown
+        assert markdown.startswith(SUGGESTION_LEGEND) == bool(suggestion_ids)
+
+
 class TestSuggestedTextStyle:
     def test_suggested_bold_is_rendered(self):
         doc = _doc(
