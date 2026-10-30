@@ -124,14 +124,20 @@ def resolve_anchor_range(body: dict[str, Any], anchor: str) -> tuple[int, int]:
     """
     if not anchor or not anchor.strip():
         raise AnchorResolutionError("anchor_text must not be empty.")
+    anchor_units = utf16_length(anchor)
     matches: list[tuple[int, int]] = []
     for start_index, _end_index, text, _style in iter_paragraphs(
         body, include_tables=True
     ):
+        # Advance the UTF-16 position from the previous match rather than
+        # re-measuring the whole prefix, so a repeated anchor stays linear.
+        position, units = 0, 0
         offset = text.find(anchor)
         while offset != -1:
-            start = start_index + utf16_length(text[:offset])
-            matches.append((start, start + utf16_length(anchor)))
+            units += utf16_length(text[position:offset])
+            position = offset
+            start = start_index + units
+            matches.append((start, start + anchor_units))
             offset = text.find(anchor, offset + 1)
     if not matches:
         raise AnchorResolutionError(

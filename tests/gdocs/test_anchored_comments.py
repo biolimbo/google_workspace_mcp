@@ -138,6 +138,14 @@ class TestResolveAnchorRange:
         with pytest.raises(AnchorResolutionError, match="matches 2 locations"):
             resolve_anchor_range(BODY, "ro")  # Intro and brown
 
+    def test_repeated_anchor_in_one_paragraph_reports_utf16_indices(self):
+        body = {"content": [_paragraph(1, "\U0001f600 go \U0001f600 go\n")]}
+        # Each emoji takes two index units, so the matches start at 4 and 10.
+        with pytest.raises(
+            AnchorResolutionError, match=r"matches 2 locations \(at indices 4, 10\)"
+        ):
+            resolve_anchor_range(body, "go")
+
     def test_missing_anchor_is_reported(self):
         with pytest.raises(AnchorResolutionError, match="was not found"):
             resolve_anchor_range(BODY, "lazy dog")
