@@ -389,7 +389,7 @@ Use `list_type='NONE'` in `create_bullet_list` to remove existing list formattin
 
 **Structural inspection workflow**: For tables: (1) call `inspect_doc_structure` to get `total_length`, (2) use that as the insertion index for `create_table_with_data`, (3) call `debug_table_structure` to verify the result. Never guess insertion indices.
 
-**Suggesting instead of editing**: Pass `write_mode="SUGGEST"` to `modify_doc_text`, `find_and_replace_doc`, or `batch_update_doc` to record changes as suggested edits that collaborators accept or reject in Docs. The Docs API rejects some requests as suggestions, such as named range and tab changes. Use `get_doc_content` with `suggestions_view_mode` to review pending suggestions.
+**Suggesting instead of editing**: Pass `write_mode="SUGGEST"` to `modify_doc_text`, `find_and_replace_doc`, or `batch_update_doc` to record changes as suggested edits that collaborators accept or reject in Docs. The Docs API rejects some requests as suggestions, such as named range and tab changes. To check what pending suggestions would change, compare `get_doc_content` output with `suggestions_view_mode` set to `PREVIEW_SUGGESTIONS_ACCEPTED` and to `PREVIEW_WITHOUT_SUGGESTIONS`; the plain text does not mark which text is suggested, and `SUGGESTIONS_INLINE` runs old and new text together.
 
 **Formatting without changing text**: Call `modify_doc_text` with `start_index` and `end_index` but omit `text` to apply formatting (bold, italic, color, etc.) to existing content.
 
