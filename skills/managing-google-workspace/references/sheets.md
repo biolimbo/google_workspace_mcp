@@ -43,6 +43,15 @@ Get spreadsheet metadata: title, locale, and list of sheets.
 ### read_sheet_values
 Read values from a range in a spreadsheet.
 
+The response has one line per row: the sheet row number, then the row's cells
+separated by tabs, starting at the range's first column (the line above the rows says
+which). Row numbers are the sheet's own, so reading `A41:G60` starts at row 41.
+If the API's response gives no A1 starting cell, rows are instead numbered from 1
+within the range, and the line above the rows says so.
+Trailing empty cells are dropped. Tabs, line breaks and backslashes inside a
+cell are shown as `\t`, `\n`, `\r` and `\\`, so `\\n` is a backslash
+followed by `n`, not a line break.
+
 Open-ended or oversized A1 ranges are clamped to at most **1000 rows** before
 the Sheets API request (same budget as the default `A1:Z1000`). When clamped,
 the response includes a note with the rewritten range so you can request the
@@ -259,15 +268,15 @@ List all comments on a spreadsheet.
 | max_comments | integer | no | 100 | Cap on comments returned; must be at least 1. Default comes from `WORKSPACE_MCP_COMMENTS_MAX`; unset, invalid, or non-positive values fall back to 100 |
 
 ### manage_spreadsheet_comment
-Create, reply to, or resolve a comment.
+Create, reply to, resolve, edit, or delete a comment.
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
 | user_google_email | string | yes | | |
 | spreadsheet_id | string | yes | | |
-| action | string | yes | | `create`, `reply`, or `resolve` |
-| comment_content | string | for create/reply | | Comment text |
-| comment_id | string | for reply/resolve | | Target comment ID |
+| action | string | yes | | `create`, `reply`, `resolve`, `update`, or `delete` |
+| comment_content | string | for create/reply/update | | Comment text |
+| comment_id | string | for reply/resolve/update/delete | | Target comment ID |
 | cell | string | no | | Single cell in A1 notation (e.g. `Sheet1!B2`) to anchor a `create` comment to. Omit for a file-level comment |
 
 ---

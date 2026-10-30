@@ -261,6 +261,7 @@ class TestSuggestionMarkers:
                 {"dateElementProperties": {"displayText": "Oct 20"}},
                 "Oct 20",
             ),
+            ("dropdown", {"dropdownProperties": {"displayValue": "Open"}}, "Open"),
             ("inlineObjectElement", {"inlineObjectId": "img-1"}, "[Image: Picture]"),
             ("footnoteReference", {"footnoteId": "fn-1"}, "[^fn-1]"),
             ("horizontalRule", {}, "\n---\n"),
