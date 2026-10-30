@@ -357,7 +357,7 @@ Execute multiple operations atomically in a single API call. Each operation is a
 | user_google_email | string | yes | | |
 | document_id | string | yes | | |
 | operations | array | yes | | List of operation dicts (see types below) |
-| write_mode | string | no | EDIT | `SUGGEST` records every operation as a suggested edit |
+| write_mode | string | no | EDIT | `SUGGEST` records the operations as suggested edits. The Docs API rejects some operations as suggestions, such as tab and named range changes, and then applies none of the batch |
 
 **Operation types:**
 
