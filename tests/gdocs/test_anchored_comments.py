@@ -380,7 +380,7 @@ class TestManageDocumentCommentAnchorText:
         drive.comments.assert_not_called()
         docs.documents.assert_not_called()
 
-    @pytest.mark.parametrize("action", ["reply", "resolve"])
+    @pytest.mark.parametrize("action", ["reply", "resolve", "update", "delete"])
     @pytest.mark.asyncio
     async def test_anchor_text_rejected_outside_create(self, manage_comment, action):
         with pytest.raises(ValueError, match="only supported for the create"):
