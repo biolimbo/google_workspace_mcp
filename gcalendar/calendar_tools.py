@@ -30,6 +30,7 @@ from gcalendar.calendar_helpers import (
     _resolve_color_id,
     _resolve_conference_data,
     _saved_event_times,
+    _split_recurring_event,
     _status_event_time_entry,
     _validate_auto_decline_mode,
     _validate_chat_status,
@@ -148,7 +149,7 @@ async def get_events(
         max_results (int): The maximum number of events to return in one page. Defaults to 25. Ignored if event_id is provided.
         page_token (Optional[str]): Token for the next page, taken from a previous response. When single_events=True, also pass the response's Pagination time_min as time_min, even if omitted on the first call. Keep all other query parameters unchanged. Ignored if event_id is provided.
         query (Optional[str]): A keyword to search for within event fields (summary, description, location). Ignored if event_id is provided.
-        detailed (bool): Whether to return detailed event information including description, location, colour (colorId), attendees, and attendee details (response status, organizer, optional flags). Recurring instances also report the parent series ID needed to edit the whole series; recurring masters report their raw RFC5545 recurrence rules; and events that are not ordinary confirmed meetings report their event type (outOfOffice, workingLocation, focusTime) and status. Defaults to False.
+        detailed (bool): Whether to return detailed event information including description, location, colour (colorId), attendees, and attendee details (response status, organizer, optional flags). Recurring instances also report the parent series ID needed to edit the whole series; recurring masters report their raw RFC5545 recurrence rules; and events that are not ordinary confirmed meetings report their event type (outOfOffice, workingLocation, focusTime) and status. Custom reminders (an empty list means none), non-default visibility and transparency are reported too; events using the calendar's default reminders omit the Reminders line. Defaults to False.
         include_attachments (bool): Whether to include attachment information in detailed event output. When True, shows attachment details (fileId, fileUrl, mimeType, title) for events that have attachments. Only applies when detailed=True. Set this to True when you need to view or access files that have been attached to calendar events, such as meeting documents, presentations, or other shared files. Defaults to False.
         single_events (bool): Whether to expand recurring series into individual instances. Defaults to True for backwards compatibility. Set to False with detailed=True to retrieve recurring master events and their exact RFC5545 recurrence rules instead of inferring cadence from expanded instances.
 
@@ -540,6 +541,7 @@ async def _modify_event_impl(
     *,
     start_timezone: Optional[str] = None,
     end_timezone: Optional[str] = None,
+    this_and_following: bool = False,
 ) -> str:
     """Internal implementation for modifying a calendar event."""
     logger.info(
@@ -680,6 +682,19 @@ async def _modify_event_impl(
         message = "No fields provided to modify the event."
         logger.warning(f"[modify_event] {message}")
         raise Exception(message)
+
+    if this_and_following:
+        new_series = await _split_recurring_event(
+            service, calendar_id, event_id, event_body, send_updates
+        )
+        return (
+            f"Successfully modified '{new_series.get('summary', summary)}' from "
+            f"instance {event_id} onward for {user_google_email}. Earlier instances "
+            "keep the original series; this and following instances are now series "
+            f"ID {new_series.get('id')}. "
+            f"Link: {new_series.get('htmlLink', 'No link available')}"
+            + _saved_event_times(new_series)
+        )
 
     # Log the event ID for debugging
     logger.info(
@@ -933,6 +948,7 @@ async def manage_event(
     *,
     start_timezone: Optional[str] = None,
     end_timezone: Optional[str] = None,
+    this_and_following: bool = False,
 ) -> str:
     """
     Manages calendar events. Supports creating, updating, deleting, and RSVP.
@@ -988,6 +1004,11 @@ async def manage_event(
         response (Optional[str]): RSVP response — "accepted", "declined", "tentative", or "needsAction" (rsvp action only).
         rsvp_comment (Optional[str]): Optional message to include with the RSVP response (rsvp action only).
         send_updates (Optional[str]): Notification behavior for create, update, delete, and rsvp — "all" (default), "externalOnly", or "none".
+        this_and_following (bool): Update only. With event_id set to a recurring instance ID,
+            applies the change to that instance and every later one by ending the original
+            series before it and starting a new series there; earlier instances are kept.
+            Updating the series ID instead changes every instance, and moving its start or
+            recurrence drops past instances that no longer match. Defaults to False.
 
     Returns:
         str: Confirmation message with event details.
@@ -1000,6 +1021,9 @@ async def manage_event(
             raise UserInputError(
                 f"Invalid send_updates '{send_updates}'. Must be one of: {sorted(valid_send_updates)}"
             )
+
+    if this_and_following and action_lower != "update":
+        raise UserInputError("this_and_following applies only to the update action.")
 
     # Resolve the conferencing inputs (raw payload or helper params) once for the
     # actions that build an event body.
@@ -1079,6 +1103,7 @@ async def manage_event(
             guests_can_see_other_guests=guests_can_see_other_guests,
             attachments=attachments,
             send_updates=send_updates or "all",
+            this_and_following=this_and_following,
         )
     elif action_lower == "delete":
         if not event_id:
