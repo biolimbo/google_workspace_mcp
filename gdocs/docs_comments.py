@@ -15,18 +15,17 @@ from typing import Any, Optional
 
 from core.utils import UserInputError
 from gdocs.docs_anchors import AnchorResolutionError, resolve_anchor_range
+from gdocs.docs_helpers import (
+    COMMENT_UPDATE_FAILED,
+    MAX_COMMENT_UTF8_UNITS,
+    build_insert_comment_request,
+)
 from gdocs.managers.batch_operation_manager import (
     _find_document_tab,
     _first_document_tab,
 )
 
 logger = logging.getLogger(__name__)
-
-# InsertCommentRequest.content is capped by the Docs API.
-MAX_COMMENT_UTF8_UNITS = 2048
-
-# BatchUpdateDocumentResponse.commentUpdateState when no comment was saved.
-COMMENT_UPDATE_FAILED = "ALL_FAILED_UNKNOWN_REASON"
 
 
 def _tab_body(doc: dict[str, Any], tab_id: Optional[str]) -> dict[str, Any]:
@@ -43,31 +42,20 @@ def _tab_body(doc: dict[str, Any], tab_id: Optional[str]) -> dict[str, Any]:
     return tab.get("body", {})
 
 
-def build_insert_comment_request(
-    start_index: int,
-    end_index: int,
-    comment_content: str,
-    tab_id: Optional[str] = None,
-) -> dict[str, Any]:
-    """Build the batchUpdate request that creates a comment thread on a range."""
-    comment_range: dict[str, Any] = {"startIndex": start_index, "endIndex": end_index}
-    if tab_id:
-        comment_range["tabId"] = tab_id
-    return {"insertComment": {"range": comment_range, "content": comment_content}}
-
-
 async def insert_anchored_comment(
     docs_service,
     document_id: str,
     anchor_text: str,
     comment_content: str,
     tab_id: Optional[str] = None,
+    assignee_email: Optional[str] = None,
 ) -> dict[str, Any]:
     """Create a comment anchored to anchor_text via the Docs API.
 
     Returns the created thread's comment ID, the quoted text and the resolved
     range. anchor_text must fit within one paragraph and occur exactly once in
-    the tab; the search covers table cells too.
+    the tab; the search covers table cells too. assignee_email, when given,
+    assigns the comment like a "+email" mention in the editor.
 
     When the read response supplies a revision ID, reject stale writes instead
     of retrying with old indices. Google omits revision IDs for users without
@@ -92,7 +80,7 @@ async def insert_anchored_comment(
         raise UserInputError(str(e)) from e
 
     request = build_insert_comment_request(
-        start_index, end_index, comment_content, tab_id
+        start_index, end_index, comment_content, tab_id, assignee_email
     )
     logger.info(
         f"[create_document_comment] Anchoring comment to {start_index}-{end_index} "

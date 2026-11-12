@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 from googleapiclient.errors import HttpError
+from pydantic import TypeAdapter, ValidationError
 from httplib2 import Response
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -19,6 +20,9 @@ from gdocs.docs_anchors import (
     iter_paragraphs,
     resolve_anchor_range,
 )
+from gdocs.docs_helpers import validate_operation
+from gdocs.managers.batch_operation_manager import BatchOperationManager
+from gdocs.operation_schemas import BatchDocOperation
 from gdocs.docs_comments import (
     COMMENT_UPDATE_FAILED,
     MAX_COMMENT_UTF8_UNITS,
@@ -452,3 +456,155 @@ def test_manage_document_comment_requires_only_drive_scope():
     tool = tools["manage_comment"]
     fn = tool.fn if hasattr(tool, "fn") else tool
     assert set(fn._required_google_scopes) == {DRIVE_SCOPE}
+
+
+class TestAssigneeEmail:
+    def test_assignee_goes_into_the_request(self):
+        request = build_insert_comment_request(
+            11, 22, "x", assignee_email="matt@example.com"
+        )
+        assert request["insertComment"]["assigneeEmailAddress"] == "matt@example.com"
+
+    @pytest.mark.asyncio
+    async def test_manage_comment_passes_assignee_through(self, manage_comment):
+        docs = _docs_service()
+
+        await manage_comment(
+            Mock(),
+            docs,
+            "user@example.com",
+            DOC_ID,
+            "create",
+            comment_content="Owner?",
+            anchor_text="quick brown",
+            assignee_email="matt@example.com",
+        )
+
+        request = _batch_requests(docs)[0]["insertComment"]
+        assert request["assigneeEmailAddress"] == "matt@example.com"
+
+    @pytest.mark.asyncio
+    async def test_assignee_requires_anchor_text(self, manage_comment):
+        with pytest.raises(ValueError, match="assignee_email requires anchor_text"):
+            await manage_comment(
+                Mock(),
+                Mock(),
+                "user@example.com",
+                DOC_ID,
+                "create",
+                comment_content="hi",
+                assignee_email="matt@example.com",
+            )
+
+
+async def _run_batch(operations, update_state="ALL_SAVED"):
+    service = _docs_service(update_state=update_state)
+    result = await BatchOperationManager(service).execute_batch_operations(
+        DOC_ID, operations
+    )
+    return result, service
+
+
+class TestBatchInsertComment:
+    @pytest.mark.asyncio
+    async def test_index_range_builds_request_and_returns_threads(self):
+        operation = TypeAdapter(BatchDocOperation).validate_python(
+            {
+                "type": "insert_comment",
+                "content": "Source?",
+                "start_index": 11,
+                "end_index": 22,
+                "assignee_email": "matt@example.com",
+                "tab_id": "t.1",
+            }
+        )
+        (success, message, metadata), service = await _run_batch(
+            [operation.model_dump(exclude_none=True)]
+        )
+        assert success, message
+        assert _batch_requests(service) == [
+            {
+                "insertComment": {
+                    "range": {"startIndex": 11, "endIndex": 22, "tabId": "t.1"},
+                    "content": "Source?",
+                    "assigneeEmailAddress": "matt@example.com",
+                }
+            }
+        ]
+        assert metadata["created_comments"][0]["commentId"] == "thread-1"
+
+    @pytest.mark.asyncio
+    async def test_many_anchored_comments_in_one_batch(self):
+        (success, message, _), service = await _run_batch(
+            [
+                {"type": "insert_comment", "content": "a", "anchor_text": "Intro"},
+                {"type": "insert_comment", "content": "b", "anchor_text": "quick"},
+                {"type": "insert_comment", "content": "c", "anchor_text": "Unknown"},
+            ]
+        )
+        assert success, message
+        ranges = [r["insertComment"]["range"] for r in _batch_requests(service)]
+        assert ranges == [
+            {"startIndex": 1, "endIndex": 6},
+            {"startIndex": 11, "endIndex": 16},
+            {"startIndex": 49, "endIndex": 56},
+        ]
+        content_reads = [
+            c
+            for c in service.documents.return_value.get.call_args_list
+            if "fields" not in c.kwargs
+        ]
+        assert len(content_reads) == 1
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_anchor_fails_before_any_write(self):
+        (success, message, _), service = await _run_batch(
+            [{"type": "insert_comment", "content": "?", "anchor_text": "ro"}]
+        )
+        assert not success
+        assert "matches 2 locations" in message
+        service.documents.return_value.batchUpdate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_anchor_text_cannot_mix_with_mutations(self):
+        (success, message, _), service = await _run_batch(
+            [
+                {"type": "insert_text", "index": 1, "text": "X"},
+                {"type": "insert_comment", "content": "?", "anchor_text": "quick"},
+            ]
+        )
+        assert not success
+        assert "cannot be mixed" in message
+        service.documents.return_value.batchUpdate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_failed_comment_update_state_is_reported(self):
+        (success, message, _), _service = await _run_batch(
+            [
+                {
+                    "type": "insert_comment",
+                    "content": "?",
+                    "start_index": 1,
+                    "end_index": 6,
+                }
+            ],
+            update_state=COMMENT_UPDATE_FAILED,
+        )
+        assert not success
+        assert "were not saved" in message
+
+    @pytest.mark.parametrize(
+        "location",
+        [
+            {},
+            {"start_index": 1},
+            {"start_index": 1, "end_index": 5, "anchor_text": "Intro"},
+        ],
+    )
+    def test_requires_exactly_one_range(self, location):
+        operation = {"type": "insert_comment", "content": "?", **location}
+        with pytest.raises(ValidationError, match="exactly one"):
+            TypeAdapter(BatchDocOperation).validate_python(operation)
+        valid, message = validate_operation(operation)
+        assert not valid
+        assert "exactly one" in message

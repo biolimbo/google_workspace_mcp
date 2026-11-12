@@ -307,6 +307,7 @@ Create, reply to, resolve, edit, or delete a comment. A comment created with `an
 | comment_id | string | no | | Required for `reply`, `resolve`, `update`, and `delete` |
 | anchor_text | string | no | | `create` only. Nonblank literal text within one paragraph, occurring exactly once in the tab (table cells included); the comment anchors to it |
 | tab_id | string | no | | `create` only, with `anchor_text`. Tab to search; the first tab by default |
+| assignee_email | string | no | | `create` only, with `anchor_text`. Assigns the comment to that person |
 
 Tip: pick an anchor contained in one paragraph and unique across the tab. An anchor that matches several places, or none, is refused before anything is written. Omit `anchor_text` for a document-level comment; an explicitly blank anchor is rejected.
 
@@ -377,6 +378,7 @@ Execute multiple operations atomically in a single API call. Each operation is a
 | `insert_page_break` | `index` | |
 | `insert_person` | `email`, plus one of `index`, `end_of_segment=true`, `after_heading`, `before_heading` or `anchor_text` | `anchor_position`, `segment_id` (inserts an @mention smart chip) |
 | `insert_date` | `date` (`YYYY-MM-DD` or ISO 8601 with a time zone), plus one of `index`, `end_of_segment=true`, `after_heading`, `before_heading` or `anchor_text` | `anchor_position`, `segment_id`, `date_format`, `time_format`, `timezone` (needs `time_format=TIME_FORMAT_HOUR_MINUTE_TIMEZONE`; inserts a date smart chip) |
+| `insert_comment` | `content`, plus either `start_index`+`end_index` or `anchor_text` (literal text within one paragraph that occurs exactly once in the tab) | `assignee_email`, `segment_id` (adds a comment anchored to that range; `anchor_text` batches may only contain comments) |
 | `find_replace` | `find_text`, `replace_text` | `match_case` |
 | `create_bullet_list` | `start_index`, `end_index` | `list_type` (`UNORDERED`/`ORDERED`/`NONE`), `nesting_level` (0-8), `paragraph_start_indices` |
 | `insert_doc_tab` | `title`, `index` | `parent_tab_id` |

@@ -48,6 +48,7 @@ async def _manage_comment_dispatch(
     tab_id: Optional[str] = None,
     docs_service=None,
     insert_anchored_comment: Optional[Callable[..., Awaitable[dict]]] = None,
+    assignee_email: Optional[str] = None,
 ) -> str:
     """Route comment management actions to the appropriate implementation."""
     action_lower = action.lower().strip()
@@ -66,6 +67,8 @@ async def _manage_comment_dispatch(
         )
     if tab_id and not anchor_text:
         raise ValueError("tab_id requires anchor_text")
+    if assignee_email and not (anchor_text and action_lower == "create"):
+        raise ValueError("assignee_email requires anchor_text on the create action")
     if action_lower == "create":
         if not comment_content:
             raise ValueError("comment_content is required for create action")
@@ -87,6 +90,7 @@ async def _manage_comment_dispatch(
                 anchor_text,
                 comment_content,
                 tab_id,
+                assignee_email,
             )
         return await _create_comment_impl(service, app_name, file_id, comment_content)
     elif action_lower == "reply":
@@ -182,6 +186,7 @@ def create_comment_tools(
             comment_id: Optional[str] = None,
             anchor_text: Optional[str] = None,
             tab_id: Optional[str] = None,
+            assignee_email: Optional[str] = None,
         ) -> str:
             """Manage comments on a Google Document.
 
@@ -191,7 +196,9 @@ def create_comment_tools(
                 once in the tab, table cells included) to anchor the comment to
                 that text in the margin, as the Docs editor does; otherwise it is
                 a document-level comment. tab_id picks the tab to search; the
-                first tab by default.
+                first tab by default. assignee_email (anchored only) assigns the
+                comment to that person, like a "+email" mention in the editor.
+                For many comments in one call, use batch_update_doc insert_comment.
               - reply: Reply to a comment. Requires comment_id and comment_content.
               - resolve: Resolve a comment. Requires comment_id.
               - update: Edit a comment's text. Requires comment_id and comment_content.
@@ -208,6 +215,7 @@ def create_comment_tools(
                 tab_id=tab_id,
                 docs_service=docs_service,
                 insert_anchored_comment=insert_anchored_comment,
+                assignee_email=assignee_email,
             )
 
     elif file_id_param == "spreadsheet_id":
@@ -478,13 +486,19 @@ async def _create_anchored_comment_impl(
     anchor_text: str,
     comment_content: str,
     tab_id: Optional[str] = None,
+    assignee_email: Optional[str] = None,
 ) -> str:
     """Implementation for creating a text-anchored comment on a document."""
     logger.info(
         f"[create_document_comment] Creating anchored comment in document {document_id}"
     )
     created = await insert_anchored_comment(
-        docs_service, document_id, anchor_text, comment_content, tab_id
+        docs_service,
+        document_id,
+        anchor_text,
+        comment_content,
+        tab_id,
+        assignee_email=assignee_email,
     )
     return (
         f"Comment created successfully, anchored to the text "
