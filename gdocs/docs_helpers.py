@@ -1345,6 +1345,31 @@ def create_insert_date_request(
     }
 
 
+# InsertCommentRequest.content is capped by the Docs API.
+MAX_COMMENT_UTF8_UNITS = 2048
+
+# BatchUpdateDocumentResponse.commentUpdateState when no comment was saved.
+COMMENT_UPDATE_FAILED = "ALL_FAILED_UNKNOWN_REASON"
+
+
+def build_insert_comment_request(
+    start_index: int,
+    end_index: int,
+    comment_content: str,
+    tab_id: Optional[str] = None,
+    assignee_email: Optional[str] = None,
+    segment_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build the batchUpdate request that creates a comment thread on a range."""
+    request: Dict[str, Any] = {
+        "range": _build_range(start_index, end_index, tab_id, segment_id),
+        "content": comment_content,
+    }
+    if assignee_email:
+        request["assigneeEmailAddress"] = assignee_email
+    return {"insertComment": request}
+
+
 def create_bullet_list_request(
     start_index: int,
     end_index: int,
@@ -1954,6 +1979,7 @@ def validate_operation(operation: Dict[str, Any]) -> tuple[bool, str]:
         "insert_image": ["image_uri"],
         "insert_person": ["email"],
         "insert_date": ["date"],
+        "insert_comment": ["content"],
         "insert_doc_tab": ["title", "index"],
         "delete_doc_tab": ["tab_id"],
         "update_doc_tab": ["tab_id", "title"],
@@ -2008,6 +2034,16 @@ def validate_operation(operation: Dict[str, Any]) -> tuple[bool, str]:
                 False,
                 "Provide exactly one of 'index', 'end_of_segment=true', "
                 "'after_heading', 'before_heading' or 'anchor_text'.",
+            )
+
+    if op_type == "insert_comment":
+        has_start = operation.get("start_index") is not None
+        has_end = operation.get("end_index") is not None
+        has_anchor = operation.get("anchor_text") is not None
+        if has_start != has_end or (has_start and has_end) == has_anchor:
+            return (
+                False,
+                "Provide exactly one of 'start_index'+'end_index' or 'anchor_text'.",
             )
 
     return True, ""

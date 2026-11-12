@@ -481,6 +481,42 @@ class InsertDateOperation(InsertionLocationOperation, SegmentTargetDocOperation)
         return self
 
 
+class InsertCommentOperation(SegmentTargetDocOperation):
+    type: Literal["insert_comment"]
+    content: str = Field(
+        min_length=1,
+        max_length=2048,
+        description="Comment text as plain text.",
+    )
+    start_index: Optional[int] = Field(
+        default=None, description="Start of the commented range. Pair with end_index."
+    )
+    end_index: Optional[int] = Field(
+        default=None, description="End of the commented range. Pair with start_index."
+    )
+    anchor_text: Optional[str] = Field(
+        default=None,
+        description=(
+            "Anchor the comment to this literal text, resolved to a range at "
+            "execution time. Must fit in one paragraph and occur exactly once "
+            "in the tab (table cells included)."
+        ),
+    )
+    assignee_email: Optional[str] = Field(
+        default=None, description="Optional email to assign the comment to."
+    )
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "InsertCommentOperation":
+        has_indices = self.start_index is not None and self.end_index is not None
+        has_partial = (self.start_index is None) != (self.end_index is None)
+        if has_partial or has_indices == (self.anchor_text is not None):
+            raise ValueError(
+                "Provide exactly one of 'start_index'+'end_index' or 'anchor_text'."
+            )
+        return self
+
+
 class InsertDocTabOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -536,6 +572,7 @@ BatchDocOperation = Annotated[
         InsertImageOperation,
         InsertPersonOperation,
         InsertDateOperation,
+        InsertCommentOperation,
         InsertDocTabOperation,
         DeleteDocTabOperation,
         UpdateDocTabOperation,
