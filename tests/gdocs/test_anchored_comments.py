@@ -6,6 +6,8 @@ import sys
 from unittest.mock import Mock
 
 import pytest
+from googleapiclient.errors import HttpError
+from httplib2 import Response
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
@@ -109,6 +111,13 @@ def manage_comment():
 
 
 class TestResolveAnchorRange:
+    def test_anchor_cannot_span_adjacent_paragraphs(self):
+        with pytest.raises(AnchorResolutionError, match="was not found"):
+            resolve_anchor_range(BODY, "Intro\nThe quick")
+
+    def test_anchor_can_include_its_paragraph_ending_newline(self):
+        assert resolve_anchor_range(BODY, "Intro\n") == (1, 7)
+
     def test_returns_the_span_of_a_unique_match(self):
         assert resolve_anchor_range(BODY, "quick brown") == (11, 22)
 
@@ -128,6 +137,14 @@ class TestResolveAnchorRange:
     def test_ambiguous_anchor_is_refused(self):
         with pytest.raises(AnchorResolutionError, match="matches 2 locations"):
             resolve_anchor_range(BODY, "ro")  # Intro and brown
+
+    def test_repeated_anchor_in_one_paragraph_reports_utf16_indices(self):
+        body = {"content": [_paragraph(1, "\U0001f600 go \U0001f600 go\n")]}
+        # Each emoji takes two index units, so the matches start at 4 and 10.
+        with pytest.raises(
+            AnchorResolutionError, match=r"matches 2 locations \(at indices 4, 10\)"
+        ):
+            resolve_anchor_range(body, "go")
 
     def test_missing_anchor_is_reported(self):
         with pytest.raises(AnchorResolutionError, match="was not found"):
@@ -158,6 +175,48 @@ class TestBuildInsertCommentRequest:
 
 
 class TestInsertAnchoredComment:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("revision", ["rev-1", None])
+    async def test_uses_revision_guard_only_when_the_api_provides_one(self, revision):
+        service = _docs_service({"body": BODY, "revisionId": revision})
+
+        await insert_anchored_comment(service, DOC_ID, "quick brown", "Check this")
+
+        expected = {
+            "requests": [
+                {
+                    "insertComment": {
+                        "range": {"startIndex": 11, "endIndex": 22},
+                        "content": "Check this",
+                    }
+                }
+            ]
+        }
+        if revision:
+            expected["writeControl"] = {"requiredRevisionId": revision}
+        assert service.documents.return_value.batchUpdate.call_args.kwargs == {
+            "documentId": DOC_ID,
+            "body": expected,
+        }
+
+    @pytest.mark.asyncio
+    async def test_stale_revision_failure_is_not_retried_with_old_indices(self):
+        service = _docs_service({"body": BODY, "revisionId": "rev-1"})
+        failure = HttpError(
+            Response({"status": "400"}),
+            b'{"error":{"code":400,"message":"requiredRevisionId is not current"}}',
+        )
+        service.documents.return_value.batchUpdate.return_value.execute.side_effect = (
+            failure
+        )
+
+        with pytest.raises(HttpError, match="requiredRevisionId"):
+            await insert_anchored_comment(service, DOC_ID, "quick brown", "x")
+
+        service.documents.return_value.get.assert_called_once()
+        service.documents.return_value.batchUpdate.assert_called_once()
+        service.documents.return_value.batchUpdate.return_value.execute.assert_called_once()
+
     @pytest.mark.asyncio
     async def test_creates_comment_on_resolved_range(self):
         service = _docs_service()
@@ -308,27 +367,28 @@ class TestManageDocumentCommentAnchorText:
         docs.documents.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_empty_anchor_text_falls_back_to_drive(self, manage_comment):
+    @pytest.mark.parametrize("anchor_text", ["", "   "])
+    async def test_blank_anchor_text_is_rejected_before_any_api_call(
+        self, manage_comment, anchor_text
+    ):
         drive = Mock()
-        drive.comments.return_value.create.return_value.execute.return_value = {
-            "id": "c1"
-        }
         docs = Mock()
 
-        result = await manage_comment(
-            drive,
-            docs,
-            "user@example.com",
-            DOC_ID,
-            "create",
-            comment_content="Document-level",
-            anchor_text="",
-        )
+        with pytest.raises(ValueError, match="anchor_text must not be empty"):
+            await manage_comment(
+                drive,
+                docs,
+                "user@example.com",
+                DOC_ID,
+                "create",
+                comment_content="Document-level",
+                anchor_text=anchor_text,
+            )
 
-        assert "Comment ID: c1" in result
+        drive.comments.assert_not_called()
         docs.documents.assert_not_called()
 
-    @pytest.mark.parametrize("action", ["reply", "resolve"])
+    @pytest.mark.parametrize("action", ["reply", "resolve", "update", "delete"])
     @pytest.mark.asyncio
     async def test_anchor_text_rejected_outside_create(self, manage_comment, action):
         with pytest.raises(ValueError, match="only supported for the create"):

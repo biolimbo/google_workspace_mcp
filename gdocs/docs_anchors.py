@@ -114,23 +114,30 @@ def resolve_anchor_text(body: dict[str, Any], anchor: str, position: str) -> int
 
 def resolve_anchor_range(body: dict[str, Any], anchor: str) -> tuple[int, int]:
     """
-    Resolve literal text to the (start_index, end_index) range it occupies.
+    Resolve literal text within one paragraph to its (start_index, end_index).
 
     Unlike resolve_anchor_text, which yields one insertion point, this returns
     the whole span, which is what a comment or a style change is tied to. Text
     inside table cells is searched too. The anchor must occur exactly once; an
-    empty anchor is refused because it would match everywhere.
+    empty anchor is refused because it would match everywhere. Text spanning
+    multiple paragraphs is not supported.
     """
     if not anchor or not anchor.strip():
         raise AnchorResolutionError("anchor_text must not be empty.")
+    anchor_units = utf16_length(anchor)
     matches: list[tuple[int, int]] = []
     for start_index, _end_index, text, _style in iter_paragraphs(
         body, include_tables=True
     ):
+        # Advance the UTF-16 position from the previous match rather than
+        # re-measuring the whole prefix, so a repeated anchor stays linear.
+        position, units = 0, 0
         offset = text.find(anchor)
         while offset != -1:
-            start = start_index + utf16_length(text[:offset])
-            matches.append((start, start + utf16_length(anchor)))
+            units += utf16_length(text[position:offset])
+            position = offset
+            start = start_index + units
+            matches.append((start, start + anchor_units))
             offset = text.find(anchor, offset + 1)
     if not matches:
         raise AnchorResolutionError(

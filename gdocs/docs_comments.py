@@ -66,8 +66,12 @@ async def insert_anchored_comment(
     """Create a comment anchored to anchor_text via the Docs API.
 
     Returns the created thread's comment ID, the quoted text and the resolved
-    range. anchor_text must occur exactly once in the tab; the search covers
-    table cells too.
+    range. anchor_text must fit within one paragraph and occur exactly once in
+    the tab; the search covers table cells too.
+
+    When the read response supplies a revision ID, reject stale writes instead
+    of retrying with old indices. Google omits revision IDs for users without
+    edit access, so those calls retain the API's unguarded behavior.
     """
     if len(comment_content.encode("utf-8")) > MAX_COMMENT_UTF8_UNITS:
         raise UserInputError(
@@ -94,10 +98,11 @@ async def insert_anchored_comment(
         f"[create_document_comment] Anchoring comment to {start_index}-{end_index} "
         f"in document {document_id}"
     )
+    body: dict[str, Any] = {"requests": [request]}
+    if doc.get("revisionId"):
+        body["writeControl"] = {"requiredRevisionId": doc["revisionId"]}
     response = await asyncio.to_thread(
-        docs_service.documents()
-        .batchUpdate(documentId=document_id, body={"requests": [request]})
-        .execute
+        docs_service.documents().batchUpdate(documentId=document_id, body=body).execute
     )
 
     # The batch response carries a comment-specific status; a reply alone is not

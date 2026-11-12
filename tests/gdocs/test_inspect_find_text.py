@@ -80,6 +80,46 @@ DOC = _doc(
 
 
 class TestFindTextRanges:
+    def test_searches_table_of_contents_in_document_order_with_utf16_indices(self):
+        doc = _doc(
+            _paragraph(1, "needle\n"),
+            {
+                "startIndex": 8,
+                "endIndex": 20,
+                "tableOfContents": {"content": [_paragraph(9, "😀 needle\n")]},
+            },
+            _paragraph(20, "needle\n"),
+        )
+
+        found = find_text_ranges(doc, "needle")
+
+        assert found["count"] == 3
+        assert [(m["start_index"], m["end_index"]) for m in found["matches"]] == [
+            (1, 7),
+            (12, 18),
+            (20, 26),
+        ]
+        assert all(not m["in_table"] for m in found["matches"])
+
+    def test_preserves_table_membership_when_traversing_table_of_contents(self):
+        table = _table(1, ["needle\n"])
+        cell = table["table"]["tableRows"][0]["tableCells"][0]
+        cell["content"] = [{"tableOfContents": {"content": cell["content"]}}]
+
+        match = find_text_ranges(_doc(table), "needle")["matches"][0]
+
+        assert match["in_table"] is True
+        assert (match["start_index"], match["end_index"]) == (4, 10)
+
+    @pytest.mark.parametrize("in_table", [False, True])
+    def test_keeps_paragraph_ending_newline_in_exact_match_range(self, in_table):
+        doc = _doc(_table(1, ["needle\n"]) if in_table else _paragraph(1, "needle\n"))
+
+        match = find_text_ranges(doc, "needle\n")["matches"][0]
+
+        start = 4 if in_table else 1
+        assert (match["start_index"], match["end_index"]) == (start, start + 7)
+
     def test_returns_index_range_and_paragraph_for_a_match(self):
         found = find_text_ranges(DOC, "quick brown")
 
@@ -255,6 +295,31 @@ class TestInspectDocStructureFindText:
         service = Mock()
         service.documents.return_value.get.return_value.execute = Mock(return_value=doc)
         return service
+
+    @pytest.mark.asyncio
+    async def test_find_text_includes_table_of_contents_from_api_response(self):
+        doc = _doc(
+            {
+                "startIndex": 1,
+                "endIndex": 10,
+                "tableOfContents": {"content": [_paragraph(2, "needle\n")]},
+            }
+        )
+        service = self._service(doc)
+
+        result = _extract_json(
+            await _unwrap(docs_tools.inspect_doc_structure)(
+                service=service,
+                user_google_email="user@example.com",
+                document_id="doc123",
+                find_text="needle",
+            )
+        )
+
+        assert result["text_matches"]["count"] == 1
+        assert result["text_matches"]["matches"][0]["start_index"] == 2
+        fields = service.documents.return_value.get.call_args.kwargs["fields"]
+        assert "tableOfContents" in fields
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("detailed", [False, True])

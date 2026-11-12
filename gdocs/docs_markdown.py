@@ -7,9 +7,10 @@ Converts Google Docs API JSON responses to clean Markdown, preserving:
 - Ordered and unordered lists with nesting
 - Checklists with checked/unchecked state
 - Tables with header row separators
-- Smart chips: person (@mentions), rich links, dates, inline images,
-  footnotes, horizontal rules, auto-text (page numbers), equations
+- Smart chips: person (@mentions), rich links, dates, dropdowns, inline
+  images, footnotes, horizontal rules, auto-text (page numbers), equations
 - Document tabs (multi-tab and nested child tabs)
+- Explicit RGB text color as a trailing ``[color: #rrggbb]`` note (opt-in)
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import re
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from gdocs.docs_links import resolve_link_target
 
@@ -52,10 +54,11 @@ _SUGGESTION_KEYS = (
     "suggestedInsertionIds",
     "suggestedDeletionIds",
     "suggestedTextStyleChanges",
+    "suggestedDateElementPropertiesChanges",
 )
 
 
-def convert_doc_to_markdown(doc: dict[str, Any]) -> str:
+def convert_doc_to_markdown(doc: dict[str, Any], include_colors: bool = False) -> str:
     """Convert a Google Docs API document response to markdown.
 
     Supports both legacy (top-level body) and tab-aware responses
@@ -66,6 +69,7 @@ def convert_doc_to_markdown(doc: dict[str, Any]) -> str:
 
     Args:
         doc: The document JSON from docs.documents.get()
+        include_colors: Mark text with an explicit RGB color as ``[color: #rrggbb]``
 
     Returns:
         Markdown string
@@ -73,10 +77,10 @@ def convert_doc_to_markdown(doc: dict[str, Any]) -> str:
     tabs = doc.get("tabs", [])
 
     if tabs:
-        markdown = _convert_tabs_to_markdown(tabs)
+        markdown = _convert_tabs_to_markdown(tabs, include_colors=include_colors)
     else:
         # Legacy: no tabs, use top-level body/lists/footnotes/inlineObjects
-        markdown = _convert_body_to_markdown(doc)
+        markdown = _convert_body_to_markdown(doc, include_colors=include_colors)
 
     if _has_pending_suggestions(doc):
         return SUGGESTION_LEGEND + markdown
@@ -98,18 +102,20 @@ def _has_pending_suggestions(node: Any) -> bool:
     return False
 
 
-def _convert_tabs_to_markdown(tabs: list[dict[str, Any]]) -> str:
+def _convert_tabs_to_markdown(
+    tabs: list[dict[str, Any]], include_colors: bool = False
+) -> str:
     """Convert a list of document tabs to markdown, recursing into child tabs."""
     all_tab_docs: list[tuple[str, dict[str, Any]]] = []
     _collect_tabs(tabs, all_tab_docs)
 
     if len(all_tab_docs) == 1:
         _, tab_doc = all_tab_docs[0]
-        return _convert_body_to_markdown(tab_doc)
+        return _convert_body_to_markdown(tab_doc, include_colors=include_colors)
 
     sections: list[str] = []
     for title, tab_doc in all_tab_docs:
-        tab_md = _convert_body_to_markdown(tab_doc)
+        tab_md = _convert_body_to_markdown(tab_doc, include_colors=include_colors)
         sections.append(f"# {title}\n\n{tab_md}")
 
     return "\n".join(sections).rstrip("\n") + "\n"
@@ -130,7 +136,7 @@ def _collect_tabs(
             _collect_tabs([child], result)
 
 
-def _convert_body_to_markdown(doc: dict[str, Any]) -> str:
+def _convert_body_to_markdown(doc: dict[str, Any], include_colors: bool = False) -> str:
     """Convert a single document body (or documentTab) to markdown."""
     body = doc.get("body", {})
     content = body.get("content", [])
@@ -151,6 +157,7 @@ def _convert_body_to_markdown(doc: dict[str, Any]) -> str:
                 footnotes_meta=footnotes_meta,
                 inline_objects=inline_objects,
                 footnote_defs=footnote_defs,
+                include_colors=include_colors,
             )
 
             if not text.strip():
@@ -174,6 +181,7 @@ def _convert_body_to_markdown(doc: dict[str, Any]) -> str:
                             footnotes_meta=footnotes_meta,
                             inline_objects=inline_objects,
                             footnote_defs=footnote_defs,
+                            include_colors=include_colors,
                         )
                         if checked
                         else text
@@ -216,6 +224,7 @@ def _convert_body_to_markdown(doc: dict[str, Any]) -> str:
                 footnotes_meta=footnotes_meta,
                 inline_objects=inline_objects,
                 footnote_defs=footnote_defs,
+                include_colors=include_colors,
             )
             lines.append(table_md)
             lines.append("")
@@ -241,51 +250,96 @@ def _convert_paragraph_text(
     inline_objects: dict[str, Any] | None = None,
     footnote_defs: list[tuple[str, str]] | None = None,
     active_footnotes: set[str] | None = None,
+    include_colors: bool = False,
 ) -> str:
     """Convert paragraph elements to inline markdown text."""
     parts: list[str] = []
     elements = para.get("elements", [])
     link_start = 0
+    color_visible = False
     for position, elem in enumerate(elements):
         if "textRun" in elem:
             link = _effective_text_run_link(elements, position)
-            if _effective_text_run_link(elements, position - 1) != link:
+            suggestion_ids = _text_run_suggestion_ids(elements, position)
+            if (
+                _effective_text_run_link(elements, position - 1) != link
+                or _text_run_suggestion_ids(elements, position - 1) != suggestion_ids
+            ):
                 link_start = len(parts)
             parts.append(_convert_text_run(elem["textRun"], skip_strikethrough))
-            # Link a label split across styled runs once, after its final run.
-            if link and _effective_text_run_link(elements, position + 1) != link:
-                parts[link_start:] = [_apply_link("".join(parts[link_start:]), link)]
+            color = _text_run_color(elements, position) if include_colors else None
+            if color:
+                if _text_run_color(elements, position - 1) != color:
+                    color_visible = False
+                color_visible |= bool(elem["textRun"].get("content", "").strip())
+            color_ends = (
+                color is not None
+                and color_visible
+                and _text_run_color(elements, position + 1) != color
+            )
+            # Build the whole link before marking it, keeping ordinary text
+            # and different suggestions in separate links.
+            if link and (
+                color_ends
+                or _effective_text_run_link(elements, position + 1) != link
+                or _text_run_suggestion_ids(elements, position + 1) != suggestion_ids
+            ):
+                parts[link_start:] = [
+                    _mark_suggested(
+                        _apply_link("".join(parts[link_start:]), link), elem["textRun"]
+                    )
+                ]
+                link_start = len(parts)
+            elif not link:
+                parts[-1] = _mark_suggested(parts[-1], elem["textRun"])
+            if color_ends:
+                label = parts[-1].rstrip()
+                parts[-1] = f"{label} [color: {color}]{parts[-1][len(label) :]}"
             continue
         if "person" in elem:
-            part = _convert_person_chip(elem["person"])
+            carrier = elem["person"]
+            part = _convert_person_chip(carrier)
         elif "richLink" in elem:
-            part = _convert_rich_link_chip(elem["richLink"])
+            carrier = elem["richLink"]
+            part = _convert_rich_link_chip(carrier)
         elif "dateElement" in elem:
-            part = _convert_date_chip(elem["dateElement"])
+            carrier = elem["dateElement"]
+            part = _convert_date_chip(carrier)
+        elif "dropdown" in elem:
+            carrier = elem["dropdown"]
+            part = carrier.get("dropdownProperties", {}).get("displayValue", "")
         elif "inlineObjectElement" in elem:
-            part = _convert_inline_object(elem["inlineObjectElement"], inline_objects)
+            carrier = elem["inlineObjectElement"]
+            part = _convert_inline_object(carrier, inline_objects)
         elif "footnoteReference" in elem:
+            carrier = elem["footnoteReference"]
             part = _convert_footnote_reference(
-                elem["footnoteReference"],
+                carrier,
                 footnotes_meta,
                 inline_objects,
                 footnote_defs,
                 active_footnotes,
+                include_colors=include_colors,
             )
         elif "horizontalRule" in elem:
+            carrier = elem["horizontalRule"]
             part = "\n---\n"
         elif "autoText" in elem:
-            part = _convert_auto_text(elem["autoText"])
+            carrier = elem["autoText"]
+            part = _convert_auto_text(carrier)
         elif "pageBreak" in elem:
+            carrier = elem["pageBreak"]
             part = "[Page Break]"
         elif "columnBreak" in elem:
+            carrier = elem["columnBreak"]
             part = "[Column Break]"
         elif "equation" in elem:
-            part = _convert_equation(elem["equation"])
+            carrier = elem["equation"]
+            part = _convert_equation(carrier)
         else:
             continue
-        # Non-text elements carry their suggestion ids on the element itself.
-        parts.append(_mark_suggested(part, elem))
+        # Suggestion IDs belong to the typed payload, as they do for textRun.
+        parts.append(_mark_suggested(part, carrier))
     return "".join(parts).strip()
 
 
@@ -321,9 +375,8 @@ def _convert_text_run(
 ) -> str:
     """Convert a single text run to markdown.
 
-    A run that belongs to a pending suggestion is wrapped in insertion or
-    deletion markers, and suggested style changes are applied as if accepted,
-    so the SUGGESTIONS_INLINE view does not read as old and new text run together.
+    Suggested style changes are applied as if accepted. Paragraph conversion
+    adds insertion/deletion markers after assembling any complete links.
     """
     content = text_run.get("content", "")
     style = _effective_text_style(text_run)
@@ -335,7 +388,20 @@ def _convert_text_run(
     if not text:
         return ""
 
-    return _mark_suggested(_apply_text_style(text, style, skip_strikethrough), text_run)
+    return _apply_text_style(text, style, skip_strikethrough)
+
+
+def _text_run_suggestion_ids(
+    elements: list[dict[str, Any]], index: int
+) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    """Identify suggestion boundaries while grouping a linked label's runs."""
+    if 0 <= index < len(elements) and "textRun" in elements[index]:
+        run = elements[index]["textRun"]
+        return (
+            tuple(run.get("suggestedInsertionIds", [])),
+            tuple(run.get("suggestedDeletionIds", [])),
+        )
+    return None
 
 
 def _effective_text_style(text_run: dict[str, Any]) -> dict[str, Any]:
@@ -388,10 +454,27 @@ def _convert_rich_link_chip(rich_link: dict[str, Any]) -> str:
 def _convert_date_chip(date_elem: dict[str, Any]) -> str:
     """Convert a date smart chip (dateElement) to markdown.
 
-    Date elements contain dateElementProperties with displayText (the
-    locale-formatted string) and a timestamp.
+    Apply flagged property suggestions before using Google's displayText.
+    A changed date without fresh displayText uses an ISO date/time fallback;
+    this fallback does not reproduce locale-specific date formatting.
     """
-    props = date_elem.get("dateElementProperties", {})
+    props = dict(date_elem.get("dateElementProperties", {}))
+    for change in date_elem.get("suggestedDateElementPropertiesChanges", {}).values():
+        suggested = change.get("dateElementProperties", {})
+        state = change.get("dateElementPropertiesSuggestionState", {})
+        changed = False
+        for field in ("timestamp", "timeZoneId", "locale", "dateFormat", "timeFormat"):
+            if state.get(f"{field}Suggested"):
+                changed = True
+                if field in suggested:
+                    props[field] = suggested[field]
+                else:
+                    props.pop(field, None)
+        if changed:
+            # The base displayText was derived from the old properties.
+            props.pop("displayText", None)
+            if suggested.get("displayText"):
+                props["displayText"] = suggested["displayText"]
     display_text = props.get("displayText", "")
     if display_text:
         return display_text
@@ -400,8 +483,19 @@ def _convert_date_chip(date_elem: dict[str, Any]) -> str:
     if timestamp:
         try:
             dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-            return dt.strftime("%Y-%m-%d")
-        except (ValueError, TypeError):
+            dt = dt.replace(tzinfo=dt.tzinfo or ZoneInfo("UTC"))
+            dt = dt.astimezone(ZoneInfo(props.get("timeZoneId") or "UTC"))
+            text = dt.strftime("%Y-%m-%d")
+            time_format = props.get("timeFormat")
+            if time_format in (
+                "TIME_FORMAT_HOUR_MINUTE",
+                "TIME_FORMAT_HOUR_MINUTE_TIMEZONE",
+            ):
+                text += dt.strftime(" %H:%M")
+                if time_format == "TIME_FORMAT_HOUR_MINUTE_TIMEZONE":
+                    text += f" {dt.tzname()}"
+            return text
+        except (ValueError, TypeError, ZoneInfoNotFoundError):
             return timestamp
     return ""
 
@@ -429,10 +523,12 @@ def _convert_footnote_reference(
     inline_objects: dict[str, Any] | None,
     footnote_defs: list[tuple[str, str]] | None,
     active_footnotes: set[str] | None = None,
+    include_colors: bool = False,
 ) -> str:
     """Convert a footnote reference to a markdown footnote marker.
 
-    Also collects the footnote definition text for appending at the end.
+    Also collects the definition text with the reference's suggestion markers
+    for appending at the end.
     """
     fn_id = ref.get("footnoteId", "")
     if not fn_id:
@@ -451,8 +547,9 @@ def _convert_footnote_reference(
                     inline_objects=inline_objects,
                     footnote_defs=footnote_defs,
                     active_footnotes=next_active,
+                    include_colors=include_colors,
                 )
-                footnote_defs.append((fn_id, fn_text))
+                footnote_defs.append((fn_id, _mark_suggested(fn_text, ref)))
     return f"[^{fn_id}]"
 
 
@@ -463,6 +560,7 @@ def _convert_footnote_content(
     inline_objects: dict[str, Any] | None,
     footnote_defs: list[tuple[str, str]] | None,
     active_footnotes: set[str] | None = None,
+    include_colors: bool = False,
 ) -> str:
     """Convert footnote content with the same inline handling as body paragraphs."""
     parts: list[str] = []
@@ -474,6 +572,7 @@ def _convert_footnote_content(
                 inline_objects=inline_objects,
                 footnote_defs=footnote_defs,
                 active_footnotes=active_footnotes,
+                include_colors=include_colors,
             )
             if text.strip():
                 parts.append(text.strip())
@@ -484,6 +583,7 @@ def _convert_footnote_content(
                 inline_objects=inline_objects,
                 footnote_defs=footnote_defs,
                 active_footnotes=active_footnotes,
+                include_colors=include_colors,
             )
             if table_text.strip():
                 parts.append(table_text.replace("\n", " "))
@@ -541,6 +641,21 @@ def _apply_text_style(
         text = f"~~{text}~~"
 
     return text
+
+
+def _text_run_color(elements: list[dict[str, Any]], index: int) -> str | None:
+    """Return the explicit RGB foreground color of the run at ``index`` as ``#rrggbb``.
+
+    Theme colors have no fixed hex value and return None.
+    """
+    if not 0 <= index < len(elements):
+        return None
+    style = _effective_text_style(elements[index].get("textRun", {}))
+    rgb = style.get("foregroundColor", {}).get("color", {}).get("rgbColor")
+    if rgb is None:
+        return None
+    channels = (rgb.get(key, 0.0) for key in ("red", "green", "blue"))
+    return "#" + "".join(f"{min(255, max(0, round(c * 255))):02x}" for c in channels)
 
 
 def _apply_link(text: str, link: dict[str, Any]) -> str:
@@ -613,6 +728,7 @@ def _convert_table(
     inline_objects: dict[str, Any] | None = None,
     footnote_defs: list[tuple[str, str]] | None = None,
     active_footnotes: set[str] | None = None,
+    include_colors: bool = False,
 ) -> str:
     """Convert a table element to markdown."""
     rows = table.get("tableRows", [])
@@ -629,6 +745,7 @@ def _convert_table(
                 inline_objects=inline_objects,
                 footnote_defs=footnote_defs,
                 active_footnotes=active_footnotes,
+                include_colors=include_colors,
             )
             cells.append(cell_text)
         md_rows.append("| " + " | ".join(cells) + " |")
@@ -647,6 +764,7 @@ def _extract_cell_text(
     inline_objects: dict[str, Any] | None = None,
     footnote_defs: list[tuple[str, str]] | None = None,
     active_footnotes: set[str] | None = None,
+    include_colors: bool = False,
 ) -> str:
     """Extract text from a table cell."""
     parts: list[str] = []
@@ -658,6 +776,7 @@ def _extract_cell_text(
                 inline_objects=inline_objects,
                 footnote_defs=footnote_defs,
                 active_footnotes=active_footnotes,
+                include_colors=include_colors,
             )
             if text.strip():
                 parts.append(text.strip())
